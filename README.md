@@ -5,8 +5,8 @@ GoLang/PHP 面试整理
 ### 现就职于轻松筹，如有需要可内推跟进流程。
 
 ## 语言类
-- PHP
-- GoLang
+- [PHP](https://github.com/kekaiwang/interview-go/doc/go.md)
+- [GoLang](https://github.com/kekaiwang/interview-go/doc/php.md)
 
 ## 数据库
 - MySql
