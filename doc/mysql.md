@@ -1999,3 +1999,193 @@ select wait_for_executed_gtid_set(gtid_set, 1);
 在上面的第一步中，trx1 事务更新完成后，从返回包直接获取这个事务的 GTID。问题是，怎么能够让 MySQL 在执行事务后，返回包中带上 GTID 呢？
 
 <u>你只需要将参数 session_track_gtids 设置为 OWN_GTID，然后通过 API 接口 mysql_session_track_get_first 从返回包解析出 GTID 的值即可。</u>
+
+#### <font color=red>Q</font>: 如果使用 GTID 等位点的方案做读写分离，在对大表做 DDL 的时候会怎么样。
+
+假设，这条语句在主库上要执行 10 分钟，提交后传到备库就要 10 分钟（典型的大事务）。那么，在主库 DDL 之后再提交的事务的 GTID，去备库查的时候，就会等 10 分钟才出现。
+
+这样，这个读写分离机制在这 10 分钟之内都会超时，然后走主库。
+
+这种预期内的操作，应该在业务低峰期的时候，确保主库能够支持所有业务查询，然后把读请求都切到主库，再在主库上做 DDL。等备库延迟追上以后，再把读请求切回备库。
+
+通过这个思考题，我主要想让关注的是，大事务对等位点方案的影响。
+
+当然了，使用 gh-ost 方案来解决这个问题也是不错的选择。
+
+## 29 | 如何判断一个数据库是不是出问题了？
+
+### select 1 判断
+
+实际上，select 1 成功返回，只能说明这个库的进程还在，并不能说明主库没问题。现在，我们来看一下这个场景。
+
+```mysql
+set global innodb_thread_concurrency=3;
+ 
+CREATE TABLE `t` (
+  `id` int(11) NOT NULL,
+  `c` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB;
+ 
+insert into t values(1,1)
+```
+
+session A | session B | session C | session D
+---|---|---|---
+select sleep(100) from t; | select sleep(100) from t; | select sleep(100) from t; | <br>
+<br> | | | select 1;(Query OK);<br>select * from t;(blocked)
+
+> 我们设置 innodb_thread_concurrency 参数的目的是，控制 InnoDB 的并发线程上限。*也就是说，一旦并发线程数达到这个值，InnoDB 在接收到新请求的时候，就会进入等待状态，直到有线程退出。*
+
+你看到了， session D 里面，select 1 是能执行成功的，但是查询表 t 的语句会被堵住。**也就是说，如果这时候我们用 select 1 来检测实例是否正常的话，是检测不出问题的。**
+
+在 InnoDB 中，innodb_thread_concurrency 这个参数的默认值是 0，<font color=red>表示不限制并发线程数量。</font>但是，不限制并发线程数肯定是不行的。因为，一个机器的 CPU 核数有限，线程全冲进来，上下文切换的成本就会太高。  
+所以，通常情况下，<font color=red>我们建议把 innodb_thread_concurrency 设置为 64~128 之间的值。</font>这时，你一定会有疑问，并发线程上限数设置为 128 够干啥，线上的并发连接数动不动就上千了。
+
+> 在 show processlist 的结果里，看到的几千个连接，指的就是<font color=red>并发连接</font>。而“当前正在执行”的语句，才是我们所说的<font color=red>并发查询</font>。
+
+**在线程进入锁等待以后，并发线程的计数会减一。**也就是说等行锁（也包括间隙锁）的线程是不算在 128 里面的。
+
+MySQL 这样设计是非常有意义的。因为，进入锁等待的线程已经不吃 CPU 了；更重要的是，必须这么设计，才能避免整个系统锁死。
+
+假设处于锁等待的线程也占并发线程的计数，你可以设想一下这个场景：
+
+1. 线程 1 执行 begin; update t set c=c+1 where id=1, 启动了事务 trx1， 然后保持这个状态。这时候，线程处于空闲状态，不算在并发线程里面。
+2. 线程 2 到线程 129 都执行 update t set c=c+1 where id=1; 由于等行锁，进入等待状态。这样就有 128 个线程处于等待状态；
+3. 如果处于锁等待状态的线程计数不减一，InnoDB 就会认为线程数用满了，会阻止其他语句进入引擎执行，这样线程 1 不能提交事务。而另外的 128 个线程又处于锁等待状态，整个系统就堵住了。
+
+![image](https://mail.wangkekai.cn/40F19CCF-9CC9-4D8D-838B-2EC6BD94A3A2.png)
+
+这时候 InnoDB 不能响应任何请求，整个系统被锁死。而且，由于所有线程都处于等待状态，此时占用的 CPU 却是 0，而这明显不合理。所以，我们说 InnoDB 在设计时，遇到进程进入锁等待的情况时，将并发线程的计数减 1 的设计，是合理而且是必要的。
+
+在这个例子中，**同时在执行的语句超过了设置的 innodb_thread_concurrency 的值，这时候系统其实已经不行了，但是通过 select 1 来检测系统，会认为系统还是正常的。**
+
+因此，我们使用 select 1 的判断逻辑要修改一下。
+
+### 查表判断
+
+在系统库（mysql 库）里创建一个表，比如命名为 health_check，里面只放一行数据，然后定期执行：
+
+```mysql
+select * from mysql.health_check; 
+```
+
+<u>使用这个方法，我们可以检测出由于并发线程过多导致的数据库不可用的情况。</u>
+
+更新事务要写 binlog，而一旦 binlog 所在磁盘的空间占用率达到 100%，那么所有的更新语句和事务提交的 commit 语句就都会被堵住。但是，<font color=red>系统这时候还是可以正常读数据的。</font>
+
+### 更新判断
+
+常见做法是放一个 timestamp 字段，用来表示最后一次执行检测的时间。这条更新语句类似于：
+
+```mysql
+mysql> update mysql.health_check set t_modified=now();
+```
+
+节点可用性的检测都应该包含主库和备库。如果用更新来检测主库的话，那么备库也要进行更新检测。  
+但，备库的检测也是要写 binlog 的。由于我们一般会把数据库 A 和 B 的主备关系设计为双 M 结构，所以在备库 B 上执行的检测命令，也要发回给主库 A。  
+但是，<u>如果主库 A 和备库 B 都用相同的更新命令，就可能出现行冲突，也就是可能会导致主备同步停止。</u>所以，现在看来 mysql.health_check 这个表就不能只有一行数据了。
+
+为了让主备之间的更新不产生冲突，我们可以在 mysql.health_check 表上存入多行数据，并用 A、B 的 server_id 做主键。
+
+```mysql
+mysql> CREATE TABLE `health_check` (
+  `id` int(11) NOT NULL,
+  `t_modified` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB;
+ 
+/* 检测命令 */
+insert into mysql.health_check(id, t_modified) values (@@server_id, now()) on duplicate key update t_modified=now();
+```
+
+更新判断是一个相对比较常用的方案了，不过依然存在一些问题。其中，“判定慢”一直是让 DBA 头疼的问题。  
+其实，这里涉及到的是服务器 IO 资源分配的问题。
+
+首先，所有的检测逻辑都需要一个超时时间 N。执行一条 update 语句，超过 N 秒后还不返回，就认为系统不可用。
+
+IO 利用率 100% 表示系统的 IO 是在工作的，每个请求都有机会获得 IO 资源，执行自己的任务。而我们的检测使用的 update 命令，需要的资源很少，所以可能在拿到 IO 资源的时候就可以提交成功，并且在超时时间 N 秒未到达之前就返回给了检测系统。
+
+检测系统一看，update 命令没有超时，于是就得到了“系统正常”的结论。
+
+根本原因是我们上面说的所有方法，都是基于外部检测的。外部检测天然有一个问题，就是随机性。
+
+因为，外部检测都需要定时轮询，所以系统可能已经出问题了，但是却需要等到下一个检测发起执行语句的时候，我们才有可能发现问题。而且，如果你的运气不够好的话，可能第一次轮询还不能发现，这就会导致切换慢的问题。
+
+### 内部统计
+
+针对磁盘利用率这个问题，如果 MySQL 可以告诉我们，内部每一次 IO 请求的时间，那我们判断数据库是否出问题的方法就可靠得多了。
+
+其实，MySQL 5.6 版本以后提供的 performance_schema 库，就在 file_summary_by_event_name 表里统计了每次 IO 请求的时间。
+
+file_summary_by_event_name 表里有很多行数据，我们先来看看 event_name='wait/io/file/innodb/innodb_log_file’这一行。
+
+![image](https://mail.wangkekai.cn/558A0F43-8734-4544-9BD7-E5A2EF72707C.png)
+<center>performance_schema.file_summary_by_event_name 的一行</center>
+
+图中这一行表示统计的是 redo log 的写入时间，第一列 EVENT_NAME 表示统计的类型。
+
+接下来的三组数据，显示的是 redo log 操作的时间统计。
+
+第一组五列，是所有 IO 类型的统计。其中，COUNT_STAR 是所有 IO 的总次数，接下来四列是具体的统计项， 单位是皮秒；前缀 SUM、MIN、AVG、MAX，顾名思义指的就是总和、最小值、平均值和最大值。
+
+第二组六列，是读操作的统计。最后一列 SUM_NUMBER_OF_BYTES_READ 统计的是，总共从 redo log 里读了多少个字节。
+
+第三组六列，统计的是写操作。
+
+最后的第四组数据，是对其他类型数据的统计。在 redo log 里，你可以认为它们就是对 fsync 的统计。
+
+> 在 performance_schema 库的 file_summary_by_event_name 表里，binlog 对应的是 event_name = "wait/io/file/sql/binlog"这一行。各个字段的统计逻辑，与 redo log 的各个字段完全相同。
+
+<font color=red>如果打开所有的 performance_schema 项，性能大概会下降 10% 左右。</font>所以，我建议你只打开自己需要的项进行统计。你可以通过下面的方法打开或者关闭某个具体项的统计。
+
+```mysql
+mysql> update setup_instruments set ENABLED='YES', Timed='YES' where name like '%wait/io/file/innodb/innodb_log_file%';
+```
+
+假设，现在你已经开启了 redo log 和 binlog 这两个统计信息，那要怎么把这个信息用在实例状态诊断上呢？  
+很简单，你可以通过 MAX_TIMER 的值来判断数据库是否出问题了。比如，你可以设定阈值，单次 IO 请求时间超过 200 毫秒属于异常，然后使用类似下面这条语句作为检测逻辑。
+
+```mysql
+mysql> select event_name,MAX_TIMER_WAIT  FROM performance_schema.file_summary_by_event_name where event_name in ('wait/io/file/innodb/innodb_log_file','wait/io/file/sql/binlog') and MAX_TIMER_WAIT>200*1000000000;
+```
+
+发现异常后，取到你需要的信息，再通过下面这条语句：
+
+```mysql
+mysql> truncate table performance_schema.file_summary_by_event_name;
+```
+
+## 30 | 答疑文章（二）：用动态的观点看加锁
+
+**加锁规则中，包含了两个“原则”、两个“优化”和一个“bug”：**
+
+- 原则 1：加锁的基本单位是 next-key lock。希望你还记得，next-key lock 是前开后闭区间。
+- 原则 2：查找过程中访问到的对象才会加锁。
+- 优化 1：索引上的等值查询，给唯一索引加锁的时候，next-key lock 退化为行锁。
+- 优化 2：索引上的等值查询，向右遍历时且最后一个值不满足等值条件的时候，next-key lock 退化为间隙锁。
+- 一个 bug：唯一索引上的范围查询会访问到不满足条件的第一个值为止。
+
+**我们的讨论基于下面这个表：**
+
+```mysql
+CREATE TABLE `t` (
+  `id` int(11) NOT NULL,
+  `c` int(11) DEFAULT NULL,
+  `d` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `c` (`c`)
+) ENGINE=InnoDB;
+ 
+insert into t values(0,0,0),(5,5,5),
+(10,10,10),(15,15,15),(20,20,20),(25,25,25);
+```
+
+### 不等号条件里的等值查询
+
+分析一下这条语句的加锁范围：
+
+```mysql
+begin;
+select * from t where id>9 and id<12 order by id desc for update;
+```
