@@ -2661,3 +2661,65 @@ InnoDB 管理 Buffer Pool 的 LRU 算法，是用链表来实现的。
 3. 再继续扫描后续的数据，之前的这个数据页之后也不会再被访问到，于是始终没有机会移到链表头部（也就是 young 区域），很快就会被淘汰出去。
 
 可以看到，这个策略最大的收益，就是在扫描这个大表的过程中，虽然也用到了 Buffer Pool，但是对 young 区域完全没有影响，从而保证了 Buffer Pool 响应正常业务的查询命中率。
+
+## 34 | 到底可不可以使用join？
+
+先创建两张表：
+
+```mysql
+CREATE TABLE `t2` (
+  `id` int(11) NOT NULL,
+  `a` int(11) DEFAULT NULL,
+  `b` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `a` (`a`)
+) ENGINE=InnoDB;
+
+drop procedure idata;
+delimiter ;;
+create procedure idata()
+begin
+  declare i int;
+  set i=1;
+  while(i<=1000)do
+    insert into t2 values(i, i, i);
+    set i=i+1;
+  end while;
+end;;
+delimiter ;
+call idata();
+
+create table t1 like t2;
+insert into t1 (select * from t2 where id<=100)
+```
+
+### Index Nested-Loop Join
+
+```mysql
+select * from t1 straight_join t2 on (t1.a=t2.a);
+```
+
+如果直接使用 join 语句，MySQL 优化器可能会选择表 t1 或 t2 作为驱动表，这样会影响我们分析 SQL 语句的执行过程。使用 straight_join 让 MySQL 使用固定的连接方式执行查询，这样优化器只会按照我们指定的方式去 join。*在这个语句里，t1 是驱动表，t2 是被驱动表。*
+
+![image](https://mail.wangkekai.cn/1613744559202.jpg)
+
+可以看到，在这条语句里，被驱动表 t2 的字段 a 上有索引，join 过程用上了这个索引，因此这个语句的执行流程是这样的：
+
+1. 从表 t1 中读入一行数据 R；
+2. 从数据行 R 中，取出 a 字段到表 t2 里去查找；
+3. 取出表 t2 中满足条件的行，跟 R 组成一行，作为结果集的一部分；
+4. 重复执行步骤 1 到 3，直到表 t1 的末尾循环结束。
+
+对应的流程图如下：
+![image](https://mail.wangkekai.cn/1613744683957.jpg)
+
+在这个流程里：
+
+1. 对驱动表 t1 做了全表扫描，这个过程需要扫描 100 行；
+2. 而对于每一行 R，根据 a 字段去表 t2 查找，走的是树搜索过程。由于我们构造的数据都是一一对应的，因此每次的搜索过程都只扫描一行，也是总共扫描 100 行；
+3. 所以，整个执行流程，总扫描行数是 200。
+
+先看第一个问题：**能不能使用 join?**
+
+
+
