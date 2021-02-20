@@ -2853,3 +2853,56 @@ select t1.b,t2.* from  t2  straight_join t1 on (t1.b=t2.b) where t2.id<=100;
 
 **在决定哪个表做驱动表的时候，应该是两个表按照各自的条件过滤，过滤完成之后，计算参与 join 的各个字段的总数据量，数据量小的那个表，就是“小表”，应该作为驱动表。**
 
+## 35 | join语句怎么优化？
+
+还是先创建两个表：
+
+```mysql
+create table t1(id int primary key, a int, b int, index(a));
+create table t2 like t1;
+drop procedure idata;
+delimiter ;;
+create procedure idata()
+begin
+  declare i int;
+  set i=1;
+  while(i<=1000)do
+    insert into t1 values(i, 1001-i, i);
+    set i=i+1;
+  end while;
+  
+  set i=1;
+  while(i<=1000000)do
+    insert into t2 values(i, i, i);
+    set i=i+1;
+  end while;
+ 
+end;;
+delimiter ;
+call idata();
+```
+
+### Multi-Range Read 优化
+
+> **回表**是指，InnoDB 在普通索引 a 上查到主键 id 的值后，再根据一个个主键 id 的值到主键索引上去查整行数据的过程。
+
+执行这个语句：
+
+```mysql
+select * from t1 where a>=1 and a<=100;
+```
+
+主键索引是一棵 B+ 树，在这棵树上，每次只能根据一个主键 id 查到一行数据。因此，回表肯定是一行行搜索主键索引的，基本流程如图 1 所示。
+
+![image](https://mail.wangkekai.cn/11CC32CD-8239-4119-85B6-B45DF59B48A1.png)
+
+<u>如果随着 a 的值递增顺序查询的话，id 的值就变成随机的，那么就会出现随机访问，性能相对较差。</u>
+
+**因为大多数的数据都是按照主键递增顺序插入得到的，所以我们可以认为，如果按照主键的递增顺序查询的话，对磁盘的读比较接近顺序读，能够提升读性能。**
+
+这，就是 MRR 优化的设计思路。此时，语句的执行流程变成了这样：
+
+1. 根据索引 a，定位到满足条件的记录，将 id 值放入 read_rnd_buffer 中 ;
+2. 将 read_rnd_buffer 中的 id 进行递增排序；
+3. 排序后的 id 数组，依次到主键 id 索引中查记录，并作为结果返回。
+
