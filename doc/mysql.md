@@ -2906,3 +2906,36 @@ select * from t1 where a>=1 and a<=100;
 2. 将 read_rnd_buffer 中的 id 进行递增排序；
 3. 排序后的 id 数组，依次到主键 id 索引中查记录，并作为结果返回。
 
+这里，read_rnd_buffer 的大小是由 read_rnd_buffer_size 参数控制的。如果步骤 1 中，read_rnd_buffer 放满了，就会先执行完步骤 2 和 3，然后清空 read_rnd_buffer。之后继续找索引 a 的下个记录，并继续循环。
+
+> 另外需要说明的是，如果你想要稳定地使用 MRR 优化的话，需要设置set optimizer_switch="mrr_cost_based=off"。
+
+下面两幅图就是使用了 MRR 优化后的执行流程和 explain 结果。
+![image](https://mail.wangkekai.cn/1614003006074.jpg)
+
+![image](https://mail.wangkekai.cn/1614003055819.jpg)
+
+从图 3 的 explain 结果中，**可以看到 Extra 字段多了 Using MRR，表示的是用上了 MRR 优化。**而且，由于我们在 read_rnd_buffer 中按照 id 做了排序，所以最后得到的结果集也是按照主键 id 递增顺序的，也就是与图 1 结果集中行的顺序相反。
+
+**MRR 能够提升性能的核心在于**，这条查询语句在索引 a 上做的是一个范围查询（也就是说，这是一个多值查询），可以得到足够多的主键 id。这样**通过排序以后，再去主键索引查数据，才能体现出“顺序性”的优势。**
+
+### Batched Key Access
+> 5.6 版本后开始引入的 Batched Key Access(BKA)
+
+**NLJ 算法执行的逻辑是**：从驱动表 t1，一行行地取出 a 的值，再到被驱动表 t2 去做 join。也就是说，对于表 t2 来说，每次都是匹配一个值。这时，MRR 的优势就用不上了。
+
+下图是 NLJ 算法优化后的 BKA 算法的流程
+![image](https://mail.wangkekai.cn/1614003382350.jpg)
+
+上图中在 join_buffer 中放入的数据是 P1~P100，表示的是只会取查询需要的字段。当然，如果 join buffer 放不下 P1~P100 的所有数据，就会把这 100 行数据分成多段执行上图的流程。
+
+如果要使用 BKA 优化算法的话，你需要在执行 SQL 语句之前，先设置
+
+```mysql
+set optimizer_switch='mrr=on,mrr_cost_based=off,batched_key_access=on';
+```
+
+前两个参数的作用是要启用 MRR。这么做的原因是，BKA 算法的优化要依赖于 MRR。
+
+### BNL 算法的性能问题
+
