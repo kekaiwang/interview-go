@@ -3176,3 +3176,46 @@ MySQL 在记录 binlog 的时候，会把主库执行这个语句的线程 id �
 
 在 binlog_format='row’的时候，临时表的操作不记录到 binlog 中，也省去了不少麻烦，这也可以成为你选择 binlog_format 时的一个考虑因素。
 
+## 37 | 什么时候会使用内部临时表？
+
+### union 执行流程
+
+```mysql
+create table t1(id int primary key, a int, b int, index(a));
+delimiter ;;
+create procedure idata()
+begin
+  declare i int;
+
+  set i=1;
+  while(i<=1000)do
+    insert into t1 values(i, i, i);
+    set i=i+1;
+  end while;
+end;;
+delimiter ;
+call idata();
+```
+
+执行下面这条 sql ：
+
+```mysql
+(select 1000 as f) union (select id from t1 order by id desc limit 2);
+```
+
+> 这条语句用到了 union，它的语义是，取这两个子查询结果的并集。并集的意思就是这两个集合加起来，重复的行只保留一行。
+
+![image](https://mail.wangkekai.cn/7C5CEC10-536A-4F05-9C8F-96C971AFF25D.png)
+
+- 第二行的 key=PRIMARY，说明第二个子句用到了索引 id。
+- 第三行的 Extra 字段，表示在对子查询的结果集做 union 的时候，使用了临时表 (Using temporary)。
+
+这个语句的执行流程是这样的：
+
+1. 创建一个内存临时表，这个临时表只有一个整型字段 f，并且 f 是主键字段。
+2. 执行第一个子查询，得到 1000 这个值，并存入临时表中。
+3. 执行第二个子查询：
+   - 拿到第一行 id=1000，试图插入临时表中。但由于 1000 这个值已经存在于临时表了，违反了唯一性约束，所以插入失败，然后继续执行；
+   - 取到第二行 id=999，插入临时表成功。
+4. 从临时表中按行取出数据，返回结果，并删除临时表，结果中包含两行数据分别是 1000 和 999。
+
