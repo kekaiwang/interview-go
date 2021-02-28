@@ -3206,6 +3206,7 @@ call idata();
 > 这条语句用到了 union，它的语义是，取这两个子查询结果的并集。并集的意思就是这两个集合加起来，重复的行只保留一行。
 
 ![image](https://mail.wangkekai.cn/7C5CEC10-536A-4F05-9C8F-96C971AFF25D.png)
+<center>union 的 explain 结果</center>
 
 - 第二行的 key=PRIMARY，说明第二个子句用到了索引 id。
 - 第三行的 Extra 字段，表示在对子查询的结果集做 union 的时候，使用了临时表 (Using temporary)。
@@ -3218,4 +3219,57 @@ call idata();
    - 拿到第一行 id=1000，试图插入临时表中。但由于 1000 这个值已经存在于临时表了，违反了唯一性约束，所以插入失败，然后继续执行；
    - 取到第二行 id=999，插入临时表成功。
 4. 从临时表中按行取出数据，返回结果，并删除临时表，结果中包含两行数据分别是 1000 和 999。
+
+流程图如下：
+![image](https://mail.wangkekai.cn/843AA501-9741-49CB-9E48-6D70B2FBD9E6.png)
+
+> 如果把上面这个语句中的 union 改成 union all 的话，就没有了“去重”的语义。这样执行的时候，就依次执行子查询，得到的结果直接作为结果集的一部分，发给客户端。因此也就不需要临时表了。
+
+![image](https://mail.wangkekai.cn/1367AE4A-9EDC-449E-90BA-B044ECF29694.png)
+<center> union all 的 explain 结果</center>
+
+第二行的 Extra 字段显示的是 Using index，表示只使用了覆盖索引，没有用临时表了。
+
+### group by 执行流程
+
+```mysql
+select id%10 as m, count(*) as c from t1 group by m;
+```
+
+![image](https://mail.wangkekai.cn/D4288ACD-29E3-4207-8DF3-F0D2E8DBF167.png)
+<center> group by 的 explain 结果</center>
+
+在 Extra 字段里面，我们可以看到三个信息：
+
+- Using index，表示这个语句使用了覆盖索引，选择了索引 a，不需要回表；
+- Using temporary，表示使用了临时表；
+- Using filesort，表示需要排序。
+
+这个语句的执行流程是这样的：
+
+1. 创建内存临时表，表里有两个字段 m 和 c，主键是 m；
+2. 扫描表 t1 的索引 a，依次取出叶子节点上的 id 值，计算 id%10 的结果，记为 x；
+   - 如果临时表中没有主键为 x 的行，就插入一个记录 (x,1);
+   - 如果表中有主键为 x 的行，就将 x 这一行的 c 值加 1；
+3. 遍历完成后，再根据字段 m 做排序，得到结果集返回给客户端。
+
+执行流程图如下：
+![image](https://mail.wangkekai.cn/76034244-0B5E-4602-8C37-7CBF65C3FBAD.png)
+
+> 如果你的需求并不需要对结果进行排序，那你可以在 SQL 语句末尾增加 order by null
+
+这个例子里由于临时表只有 10 行，内存可以放得下，因此全程只使用了内存临时表。但是，内存临时表的大小是有限制的，参数 tmp_table_size 就是控制这个内存大小的，默认是 16M。
+
+```mysql
+set tmp_table_size=1024;
+select id%100 as m, count(*) as c from t1 group by m order by null limit 10;
+```
+
+把内存临时表的大小限制为最大 1024 字节，并把语句改成 id % 100，这样返回结果里有 100 行数据。但是，这时的内存临时表大小不够存下这 100 行数据，也就是说，执行过程中会发现内存临时表大小到达了上限（1024 字节）。
+
+**这时候就会把内存临时表转成磁盘临时表，磁盘临时表默认使用的引擎是 InnoDB。** 
+
+如果这个表 t1 的数据量很大，很可能这个查询需要的磁盘临时表就会占用大量的磁盘空间。
+
+### group by 优化方法 -- 索引
 
