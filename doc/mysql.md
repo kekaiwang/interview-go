@@ -3731,3 +3731,143 @@ insert…select，实际上往表 t2 中插入了 4 行数据。但是，这四�
 
 MySQL 5.1.22 版本开始引入的参数 innodb_autoinc_lock_mode，控制了自增值申请时的锁范围。从并发性能的角度考虑，我建议你将其设置为 2，同时将 binlog_format 设置为 row。我在前面的文章中其实多次提到，binlog_format 设置为 row，是很有必要的。今天的例子给这个结论多了一个理由。
 
+<font color=red> Q: </font> 如果在 insert … select 执行期间有其他线程操作原表，会导致逻辑错误。其实，这是不会的，如果不加锁，就是快照读。
+
+一条语句执行期间，它的一致性视图是不会修改的，所以即使有其他事务修改了原表的数据，也不会影响这条语句看到的数据。
+
+## 40 | insert语句的锁为什么这么多？
+
+### insert … select 语句
+
+为什么在可重复读隔离级别下，binlog_format=statement 时执行：
+
+```mysql
+insert into t2(c,d) select c,d from t;
+```
+
+这个语句时，需要对表 t 的所有行和间隙加锁呢？
+
+我们需要考虑的还是日志和数据的一致性。我们看下这个执行序列：
+![image](https://mail.wangkekai.cn/1023E734-4EB4-475D-A959-B2DBD54CE415.png)
+
+实际的执行效果是，如果 session B 先执行，由于这个语句对表 t 主键索引加了 (-∞,1] 这个 next-key lock，会在语句执行完成后，才允许 session A 的 insert 语句执行。
+
+但如果没有锁的话，就可能出现 session B 的 insert 语句先执行，但是后写入 binlog 的情况。于是，在 binlog_format=statement 的情况下，binlog 里面就记录了这样的语句序列：
+
+```mysql
+insert into t values(-1,-1,-1);
+insert into t2(c,d) select c,d from t;
+```
+
+这个语句到了备库执行，就会把 id=-1 这一行也写到表 t2 中，出现主备不一致。
+
+### insert 循环写入
+
+> 当然了，执行 insert … select 的时候，对目标表也不是锁全表，而是只锁住需要访问的资源。
+
+如果现在有这么一个需求：要往表 t2 中插入一行数据，这一行的 c 值是表 t 中 c 值的最大值加 1。
+
+```mysql
+insert into t2(c,d)  (select c+1, d from t force index(c) order by c desc limit 1);
+```
+
+这个语句的加锁范围，就是表 t 索引 c 上的 (3,4] 和 (4,supremum] 这两个 next-key lock，以及主键索引上 id=4 这一行。  
+执行流程也比较简单，从表 t 中按照索引 c 倒序，扫描第一行，拿到结果写入到表 t2 中。**因此整条语句的扫描行数是 1。**
+
+这个语句执行的慢查询日志（slow log），如下图所示：
+![image](https://mail.wangkekai.cn/CCB97B5A-A6B6-4B0A-BD7B-8CA348016EF5.png)
+
+通过这个慢查询日志，我们看到 Rows_examined=1，正好验证了执行这条语句的扫描行数为 1。  
+那么，如果我们是要把这样的一行数据插入到表 t 中的话：
+
+```mysql
+insert into t(c,d)  (select c+1, d from t force index(c) order by c desc limit 1);
+```
+  
+再看慢查询日志就会发现不对了。
+![image](https://mail.wangkekai.cn/4E598533-58C8-4B5A-B351-F6ECD0032512.png)
+
+这时候的 Rows_examined 的值是 5。  
+下图就是这条语句的 explain 结果。
+![image](https://mail.wangkekai.cn/8F7B345D-476F-4101-AFBF-836E89F022D5.png)
+
+从 Extra 字段可以看到“Using temporary”字样，表示这个语句用到了临时表。也就是说，执行过程中，需要把表 t 的内容读出来，写入临时表。  
+实际上，Explain 结果里的 rows=1 是因为受到了 limit 1 的影响。
+
+下图是在执行这个语句前后查看 Innodb_rows_read 的结果。
+![image](https://mail.wangkekai.cn/4CC5E966-C0C5-4E60-98D5-63532249078E.png)
+
+这个语句执行前后，Innodb_rows_read 的值增加了 4。因为默认临时表是使用 Memory 引擎的，所以这 4 行查的都是表 t，也就是说对表 t 做了全表扫描。
+
+这样，我们就把整个执行过程理清楚了：
+
+1. 创建临时表，表里有两个字段 c 和 d。
+2. 按照索引 c 扫描表 t，依次取 c=4、3、2、1，然后回表，读到 c 和 d 的值写入临时表。这时，Rows_examined=4。
+3. 由于语义里面有 limit 1，所以只取了临时表的第一行，再插入到表 t 中。这时，Rows_examined 的值加 1，变成了 5。
+
+也就是说，这个语句会导致在表 t 上做全表扫描，并且会给索引 c 上的所有间隙都加上共享的 next-key lock。所以，这个语句执行期间，其他事务不能在这个表上插入数据。
+
+至于这个语句的执行为什么需要临时表，原因是这类一边遍历数据，一边更新数据的情况，如果读出来的数据直接写回原表，就可能在遍历过程中，读到刚刚插入的记录，新插入的记录如果参与计算逻辑，就跟语义不符。
+
+由于实现上这个语句没有在子查询中就直接使用 limit 1，从而导致了这个语句的执行需要遍历整个表 t。它的优化方法也比较简单，就是用前面介绍的方法，先 insert into 到临时表 temp_t，这样就只需要扫描一行；然后再从表 temp_t 里面取出这行数据插入表 t1。
+
+当然，由于这个语句涉及的数据量很小，你可以考虑使用内存临时表来做这个优化。使用内存临时表优化时，语句序列的写法如下：
+
+```mysql
+create temporary table temp_t(c int,d int) engine=memory;
+insert into temp_t  (select c+1, d from t force index(c) order by c desc limit 1);
+insert into t select * from temp_t;
+drop table temp_t;
+```
+
+### insert 唯一键冲突
+
+![image](https://mail.wangkekai.cn/4A023A79-3B70-40DD-9275-CF85E0D04455.png)
+<center>唯一键冲突加锁</center>
+
+这个例子也是在可重复读（repeatable read）隔离级别下执行的。可以看到，session B 要执行的 insert 语句进入了锁等待状态。
+
+也就是说，session A 执行的 insert 语句，**发生唯一键冲突的时候，并不只是简单地报错返回，还在冲突的索引上加了锁。**我们前面说过，一个 next-key lock 就是由它右边界的值定义的。这时候，session A 持有索引 c 上的 (5,10] 共享 next-key lock（读锁）。
+
+> 官方文档有一个错误描述：如果冲突的是主键索引，就加记录锁，唯一索引才加 next-key lock。但实际上，这两类索引冲突加的都是 next-key lock。
+
+![image](https://mail.wangkekai.cn/CDD15DBB-88D4-4929-A7E0-6A57B90B4048.png)
+<center> 唯一键冲突 -- 死锁 </center>
+
+这个死锁产生的逻辑是这样的：
+
+1. 在 T1 时刻，启动 session A，并执行 insert 语句，此时在索引 c 的 c=5 上加了记录锁。注意，这个索引是唯一索引，因此退化为记录锁（可以回顾下第 21 篇文章介绍的加锁规则）。
+2. 在 T2 时刻，session B 要执行相同的 insert 语句，发现了唯一键冲突，加上读锁；同样地，session C 也在索引 c 上，c=5 这一个记录上，加了读锁。
+3. T3 时刻，session A 回滚。这时候，session B 和 session C 都试图继续执行插入操作，都要加上写锁。两个 session 都要等待对方的行锁，所以就出现了死锁。
+
+这个流程的状态变化图如下所示。
+
+![image](https://mail.wangkekai.cn/1FD61F9F-F699-462F-9C94-CC0C3858C26C.png)
+
+### insert into … on duplicate key update
+
+上面这个例子是主键冲突后直接报错，如果是改写成
+
+```mysql
+insert into t values(11,10,10) on duplicate key update d=100;
+```
+
+的话，就会给索引 c 上 (5,10] 加一个排他的 next-key lock（写锁）。
+
+**insert into … on duplicate key update 这个语义的逻辑是，插入一行数据，如果碰到唯一键约束，就执行后面的更新语句。**
+
+> 注意，如果有多个列违反了唯一性约束，就会按照索引的顺序，修改跟第一个索引冲突的行。
+
+现在表 t 里面已经有了 (1,1,1) 和 (2,2,2) 这两行，我们再来看看下面这个语句执行的效果：
+![image](https://mail.wangkekai.cn/303DB865-C150-4866-BF77-9C3A3AC39145.png)
+
+可以看到，主键 id 是先判断的，MySQL 认为这个语句跟 id=2 这一行冲突，所以修改的是 id=2 的行。  
+需要注意的是，执行这条语句的 affected rows 返回的是 2，很容易造成误解。实际上，真正更新的只有一行，只是在代码实现上，insert 和 update 都认为自己成功了，update 计数加了 1， insert 计数也加了 1。
+
+### 小结
+
+insert … select 是很常见的在两个表之间拷贝数据的方法。你需要注意，在可重复读隔离级别下，这个语句会给 select 的表里扫描到的记录和间隙加读锁。
+
+而如果 insert 和 select 的对象是同一个表，则有可能会造成循环写入。这种情况下，我们需要引入用户临时表来做优化。
+
+insert 语句如果出现唯一键冲突，会在冲突的唯一值上加共享的 next-key lock(S 锁)。因此，碰到由于唯一键约束导致报错后，要尽快提交或回滚事务，避免加锁时间过长。
