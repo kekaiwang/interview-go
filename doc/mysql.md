@@ -4190,3 +4190,108 @@ grant super on *.* to 'ua'@'%' identified by 'pa';
 2. 如果用户 ua 已经存在，就将密码修改成 pa。  
 这也是一种不建议的写法，因为这种写法很容易就会不慎把密码给改了。
 
+## 43 | 要不要使用分区表？
+
+### 分区表是什么？
+
+先创建一个表 t：
+
+```mysql
+CREATE TABLE `t` (
+  `ftime` datetime NOT NULL,
+  `c` int(11) DEFAULT NULL,
+  KEY (`ftime`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1
+PARTITION BY RANGE (YEAR(ftime))
+(PARTITION p_2017 VALUES LESS THAN (2017) ENGINE = InnoDB,
+ PARTITION p_2018 VALUES LESS THAN (2018) ENGINE = InnoDB,
+ PARTITION p_2019 VALUES LESS THAN (2019) ENGINE = InnoDB,
+PARTITION p_others VALUES LESS THAN MAXVALUE ENGINE = InnoDB);
+insert into t values('2017-4-1',1),('2018-4-1',1);
+```
+
+![image](https://mail.wangkekai.cn/B240D313-9A08-4D05-B2ED-CCB322B04926.png)
+
+我在表 t 中初始化插入了两行记录，按照定义的分区规则，这两行记录分别落在 p_2018 和 p_2019 这两个分区上。
+
+可以看到，这个表包含了一个.frm 文件和 4 个.ibd 文件，每个分区对应一个.ibd 文件。也就是说：
+
+1. 对于引擎层来说，这是 4 个表；
+2. 对于 Server 层来说，这是 1 个表。
+
+### 分区表的引擎层行为
+
+先给你举个在分区表加间隙锁的例子，目的是说明对于 InnoDB 来说，这是 4 个表。
+![image](https://mail.wangkekai.cn/D65BB312-A90E-4141-95D3-BF1C48EBCC6C.png)
+
+我们初始化表 t 的时候，只插入了两行数据， ftime 的值分别是，‘2017-4-1’ 和’2018-4-1’ 。session A 的 select 语句对索引 ftime 上这两个记录之间的间隙加了锁。如果是一个普通表的话，那么 T1 时刻，在表 t 的 ftime 索引上，间隙和加锁状态应该是下图这样的。
+![image](https://mail.wangkekai.cn/1B356EEA-BC9F-4A12-A0DC-A293A7D44219.png)
+
+也就是说，‘2017-4-1’ 和’2018-4-1’ 这两个记录之间的间隙是会被锁住的。那么，sesion B 的两条插入语句应该都要进入锁等待状态。
+
+从上面的实验效果可以看出，session B 的第一个 insert 语句是可以执行成功的。这是因为，对于引擎来说，p_2018 和 p_2019 是两个不同的表，也就是说 2017-4-1 的下一个记录并不是 2018-4-1，而是 p_2018 分区的 supremum。所以 T1 时刻，在表 t 的 ftime 索引上，间隙和加锁的状态其实是图 4 这样的：
+
+![image](https://mail.wangkekai.cn/0A312230-8F53-4CD6-9724-C7262E2FAEF7.png)
+<center> 分区表 t 的加锁范围</center>
+
+由于分区表的规则，session A 的 select 语句其实只操作了分区 p_2018，因此加锁范围就是图 4 中深绿色的部分。  
+所以，session B 要写入一行 ftime 是 2018-2-1 的时候是可以成功的，而要写入 2017-12-1 这个记录，就要等 session A 的间隙锁。
+
+下图就是这时候的 show engine innodb status 的部分结果
+![image](https://mail.wangkekai.cn/0220E9D5-E830-4BA9-AAFF-5B892233AB73.png)
+
+再来看一个 MyISAM 分区表的例子。  
+首先用 alter table t engine=myisam，把表 t 改成 MyISAM 表；然后，我再用下面这个例子说明，对于 MyISAM 引擎来说，这是 4 个表。
+![image](https://mail.wangkekai.cn/BB3B6B92-1624-43D0-81F6-3F9C75F0F904.png)
+
+在 session A 里面，我用 sleep(100) 将这条语句的执行时间设置为 100 秒。由于 MyISAM 引擎只支持表锁，所以这条 update 语句会锁住整个表 t 上的读。  
+但我们看到的结果是，session B 的第一条查询语句是可以正常执行的，第二条语句才进入锁等待状态。
+
+**这正是因为 MyISAM 的表锁是在引擎层实现的，session A 加的表锁，其实是锁在分区 p_2018 上。**因此，只会堵住在这个分区上执行的查询，落到其他分区的查询是不受影响的。
+
+分区表和手工分表，一个是由 server 层来决定使用哪个分区，一个是由应用层代码来决定使用哪个分表。因此，从引擎层看，这两种方式也是没有差别的。
+
+其实这两个方案的区别，主要是在 server 层上。从 server 层看，我们就不得不提到分区表一个被广为诟病的问题：打开表的行为。
+
+### 分区策略
+
+每当第一次访问一个分区表的时候，MySQL 需要把所有的分区都访问一遍。**一个典型的报错情况是这样的：**如果一个分区表的分区很多，比如超过了 1000 个，而 MySQL 启动的时候，open_files_limit 参数使用的是默认值 1024，那么就会在访问这个表的时候，由于需要打开所有的文件，导致打开表文件的个数超过了上限而报错。
+
+下图是创建的一个包含了很多分区的表 t_myisam，执行一条插入语句后报错的情况。
+![image](https://mail.wangkekai.cn/41B5A6FD-5852-42BD-AD90-513E1068A713.png)
+
+可以看到，这条 insert 语句，明显只需要访问一个分区，但语句却无法执行。  
+这个表我用的是 MyISAM 引擎，因为使用 InnoDB 引擎的话，并不会出现这个问题。
+
+MyISAM 分区表使用的分区策略，**我们称为通用分区策略（generic partitioning）**，每次访问分区都由 server 层控制。通用分区策略，是 MySQL 一开始支持分区表的时候就存在的代码，在文件管理、表管理的实现上很粗糙，因此有比较严重的性能问题。
+
+**从 MySQL 5.7.9 开始，InnoDB 引擎引入了本地分区策略（native partitioning）。**这个策略是在 InnoDB 内部自己管理打开分区的行为。  
+MySQL 从 5.7.17 开始，将 MyISAM 分区表标记为即将弃用 (deprecated)，意思是“从这个版本开始不建议这么使用，请使用替代方案。在将来的版本中会废弃这个功能”。  
+从 MySQL 8.0 版本开始，就不允许创建 MyISAM 分区表了，只允许创建已经实现了本地分区策略的引擎。目前来看，只有 InnoDB 和 NDB 这两个引擎支持了本地分区策略。
+
+### 分区表的 server 层行为
+
+如果从 server 层看的话，一个分区表就只是一个表。
+
+下面两图所示，分别是这个例子的操作序列和执行结果图。
+![image](https://mail.wangkekai.cn/684EAD76-BCBA-4674-88C3-DA71330CD7CD.png)
+<center>分区表的 MDL 锁 </center>
+
+![image](https://mail.wangkekai.cn/8AB3BD87-7C40-4886-B80C-9FE00EF519F0.png)
+<center> show processlist 结果</center>
+
+可以看到，虽然 session B 只需要操作 p_2107 这个分区，但是由于 session A 持有整个表 t 的 MDL 锁，就导致了 session B 的 alter 语句被堵住。
+
+到这里我们小结一下：
+
+1. MySQL 在第一次打开分区表的时候，需要访问所有的分区；
+2. 在 server 层，认为这是同一张表，因此所有分区共用同一个 MDL 锁；
+3. 在引擎层，认为这是不同的表，因此 MDL 锁之后的执行过程，会根据分区表规则，只访问必要的分区。
+
+### 分区表的应用场景
+
+分区表的一个显而易见的优势是对业务透明，相对于用户分表来说，使用分区表的业务代码更简洁。还有，分区表可以很方便的清理历史数据。
+
+如果一项业务跑的时间足够长，往往就会有根据时间删除历史数据的需求。这时候，按照时间分区的分区表，就可以直接通过 alter table t drop partition …这个语法删掉分区，从而删掉过期的历史数据。
+
+这个 alter table t drop partition …操作是直接删除分区文件，效果跟 drop 普通表类似。与使用 delete 语句删除数据相比，优势是速度快、对系统影响小。
