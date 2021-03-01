@@ -4295,3 +4295,294 @@ MySQL 从 5.7.17 开始，将 MyISAM 分区表标记为即将弃用 (deprecated)
 如果一项业务跑的时间足够长，往往就会有根据时间删除历史数据的需求。这时候，按照时间分区的分区表，就可以直接通过 alter table t drop partition …这个语法删掉分区，从而删掉过期的历史数据。
 
 这个 alter table t drop partition …操作是直接删除分区文件，效果跟 drop 普通表类似。与使用 delete 语句删除数据相比，优势是速度快、对系统影响小。
+## 44 | 答疑文章（三）：说一说这些好问题
+
+### join 的写法
+
+先说两个问题：
+1. 如果用 left join 的话，左边的表一定是驱动表吗？
+2. 如果两个表的 join 包含多个条件的等值匹配，是都要写到 on 里面呢，还是只把一个条件写到 on 里面，其他条件写到 where 部分？
+
+构造两个表 a 和 b：
+```mysql
+create table a(f1 int, f2 int, index(f1))engine=innodb;
+create table b(f1 int, f2 int)engine=innodb;
+insert into a values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6);
+insert into b values(3,3),(4,4),(5,5),(6,6),(7,7),(8,8);
+```
+
+表 a 和 b 都有两个字段 f1 和 f2，不同的是表 a 的字段 f1 上有索引。然后，我往两个表中都插入了 6 条记录，其中在表 a 和 b 中同时存在的数据有 4 行。
+
+两个问题其实就是下面两种写法的区别：
+
+```mysql
+select * from a left join b on(a.f1=b.f1) and (a.f2=b.f2); /*Q1*/
+select * from a left join b on(a.f1=b.f1) where (a.f2=b.f2);/*Q2*/
+```
+
+首先，需要说明的是，这两个 left join 语句的语义逻辑并不相同。我们先来看一下它们的执行结果。
+![image](https://mail.wangkekai.cn/1614606922389.jpg)
+
+可以看到：
+
+1. 语句 Q1 返回的数据集是 6 行，表 a 中即使没有满足匹配条件的记录，查询结果中也会返回一行，并将表 b 的各个字段值填成 NULL。
+2. 语句 Q2 返回的是 4 行。从逻辑上可以这么理解，最后的两行，由于表 b 中没有匹配的字段，结果集里面 b.f2 的值是空，不满足 where 部分的条件判断，因此不能作为结果集的一部分。
+
+先一起看看语句 Q1 的 explain 结果
+![image](https://mail.wangkekai.cn/1614606983985.jpg)
+
+可以看到，这个结果符合我们的预期：
+
+- 驱动表是表 a，被驱动表是表 b；
+- 由于表 b 的 f1 字段上没有索引，所以使用的是 Block Nexted Loop Join（简称 BNL） 算法。
+
+看到 BNL 算法，你就应该知道这条语句的执行流程其实是这样的：
+
+1. 把表 a 的内容读入 join_buffer 中。因为是 select * ，所以字段 f1 和 f2 都被放入 join_buffer 了。
+2. 顺序扫描表 b，对于每一行数据，判断 join 条件（也就是 a.f1=b.f1 and a.f2=b.f2) 是否满足，满足条件的记录, 作为结果集的一行返回。如果语句中有 where 子句，需要先判断 where 部分满足条件后，再返回。
+3. 表 b 扫描完成后，对于没有被匹配的表 a 的行（在这个例子中就是 (1,1)、(2,2) 这两行），把剩余字段补上 NULL，再放入结果集中。
+
+对应的流程图如下：
+![image](https://mail.wangkekai.cn/1614607035184.jpg)
+
+可以看到，这条语句确实是以表 a 为驱动表，而且从执行效果看，也和使用 straight_join 是一样的。
+
+先看一下语句 Q2 的 expain 结果:
+![image](https://mail.wangkekai.cn/1614607101436.jpg)
+
+可以看到，这条语句是以表 b 为驱动表的。而如果一条 join 语句的 Extra 字段什么都没写的话，就表示使用的是 Index Nested-Loop Join（简称 NLJ）算法。
+
+**执行流程是这样的**：顺序扫描表 b，每一行用 b.f1 到表 a 中去查，匹配到记录后判断 a.f2=b.f2 是否满足，满足条件的话就作为结果集的一部分返回。
+
+**为什么语句 Q1 和 Q2 这两个查询的执行流程会差距这么大呢？**其实，这是因为优化器基于 Q2 这个查询的语义做了优化。
+
+> 在 MySQL 里，NULL 跟任何值执行等值判断和不等值判断的结果，都是 NULL。这里包括， select NULL = NULL 的结果，也是返回 NULL。
+
+语句 Q2 里面 where a.f2=b.f2 就表示，查询结果里面不会包含 b.f2 是 NULL 的行，这样这个 left join 的语义就是“找到这两个表里面，f1、f2 对应相同的行。对于表 a 中存在，而表 b 中匹配不到的行，就放弃”。  
+这样，这条语句虽然用的是 left join，但是语义跟 join 是一致的。
+
+优化器就把这条语句的 left join 改写成了 join，然后因为表 a 的 f1 上有索引，就把表 b 作为驱动表，这样就可以用上 NLJ 算法。在执行 explain 之后，你再执行 show warnings，就能看到这个改写的结果，如下图所示。
+
+![image](https://mail.wangkekai.cn/1614607236719.jpg)
+
+这个例子说明，即使我们在 SQL 语句中写成 left join，执行过程还是有可能不是从左到右连接的。<font color=red>也就是说，使用 left join 时，左边的表不一定是驱动表。</font>
+
+**如果需要 left join 的语义，就不能把被驱动表的字段放在 where 条件里面做等值判断或不等值判断，必须都写在 on 里面。**那如果是 join 语句呢？
+
+```mysql
+select * from a join b on(a.f1=b.f1) and (a.f2=b.f2); /*Q3*/
+select * from a join b on(a.f1=b.f1) where (a.f2=b.f2);/*Q4*/
+```
+
+再使用一次看 explain 和 show warnings 的方法，看看优化器是怎么做的。
+![image](https://mail.wangkekai.cn/1614607341284.jpg)
+
+可以看到，这两条语句都被改写成：
+```mysql
+select * from a join b where (a.f1=b.f1) and (a.f2=b.f2);
+```
+
+也就是说，在这种情况下，join 将判断条件是否全部放在 on 部分就没有区别了。
+
+### Simple Nested Loop Join 的性能问题
+
+虽然 BNL 算法和 Simple Nested Loop Join 算法都是要判断 M*N 次（M 和 N 分别是 join 的两个表的行数），但是 Simple Nested Loop Join 算法的每轮判断都要走全表扫描，因此性能上 BNL 算法执行起来会快很多。
+
+BNL 算法的执行逻辑是：
+
+1. 首先，将驱动表的数据全部读入内存 join_buffer 中，这里 join_buffer 是无序数组；
+2. 然后，顺序遍历被驱动表的所有行，每一行数据都跟 join_buffer 中的数据进行匹配，匹配成功则作为结果集的一部分返回。
+
+Simple Nested Loop Join 算法的执行逻辑是：顺序取出驱动表中的每一行数据，到被驱动表去做全表扫描匹配，匹配成功则作为结果集的一部分返回。
+
+这两位同学的疑问是，Simple Nested Loop Join 算法，其实也是把数据读到内存里，然后按照匹配条件进行判断，为什么性能差距会这么大呢？  
+解释这个问题，需要用到 MySQL 中索引结构和 Buffer Pool 的相关知识点：
+
+1. 在对被驱动表做全表扫描的时候，如果数据没有在 Buffer Pool 中，就需要等待这部分数据从磁盘读入；  
+从磁盘读入数据到内存中，会影响正常业务的 Buffer Pool 命中率，而且这个算法天然会对被驱动表的数据做多次访问，更容易将这些数据页放到 Buffer Pool 的头部（请参考第 35 篇文章中的相关内容)；
+2. 即使被驱动表数据都在内存中，每次查找“下一个记录的操作”，都是类似指针操作。而 join_buffer 中是数组，遍历的成本更低。
+
+所以说，BNL 算法的性能会更好。
+
+### distinct 和 group by 的性能
+
+如果只需要去重，不需要执行聚合函数，distinct 和 group by 哪种效率高一些呢？ 
+
+如果表 t 的字段 a 上没有索引，那么下面这两条语句：
+```mysql
+select a from t group by a order by null;
+select distinct a from t;
+```
+
+首先需要说明的是，这种 group by 的写法，并不是 SQL 标准的写法。标准的 group by 语句，是需要在 select 部分加一个聚合函数，比如：
+```mysql
+select a,count(*) from t group by a order by null;
+```
+
+这条语句的逻辑是：按照字段 a 分组，计算每组的 a 出现的次数。在这个结果里，由于做的是聚合计算，相同的 a 只出现一次。
+
+没有了 count(*) 以后，也就是不再需要执行“计算总数”的逻辑时，第一条语句的逻辑就变成是：按照字段 a 做分组，相同的 a 的值只返回一行。而这就是 distinct 的语义，所以不需要执行聚合函数时，distinct 和 group by 这两条语句的语义和执行流程是相同的，因此执行性能也相同。
+
+这两条语句的执行流程是下面这样的。
+
+1. 创建一个临时表，临时表有一个字段 a，并且在这个字段 a 上创建一个唯一索引；
+2. 遍历表 t，依次取数据插入临时表中：
+   - 如果发现唯一键冲突，就跳过；
+   - 否则插入成功；
+3. 遍历完成后，将临时表作为结果集返回给客户端。
+
+### 备库自增主键问题
+
+在 binlog_format=statement 时，语句 A 先获取 id=1，然后语句 B 获取 id=2；接着语句 B 提交，写 binlog，然后语句 A 再写 binlog。这时候，如果 binlog 重放，是不是会发生语句 B 的 id 为 1，而语句 A 的 id 为 2 的不一致情况呢？
+
+首先，这个问题默认了“自增 id 的生成顺序，和 binlog 的写入顺序可能是不同的”，这个理解是正确的。
+
+其次，这个问题限定在 statement 格式下，也是对的。因为 row 格式的 binlog 就没有这个问题了，Write row event 里面直接写了每一行的所有字段的值。
+
+而至于为什么不会发生不一致的情况，我们来看一下下面的这个例子。
+```mysql
+create table t(id int auto_increment primary key);
+insert into t values(null);
+```
+
+![image](https://mail.wangkekai.cn/1614607631389.jpg)
+
+在 insert 语句之前，还有一句 SET INSERT_ID=1。这条命令的意思是，这个线程里下一次需要用到自增值的时候，不论当前表的自增值是多少，固定用 1 这个值。
+
+这个 SET INSERT_ID 语句是固定跟在 insert 语句之前的，比如 @帽子掉了同学提到的场景，主库上语句 A 的 id 是 1，语句 B 的 id 是 2，但是写入 binlog 的顺序先 B 后 A，那么 binlog 就变成：
+```mysql
+SET INSERT_ID=2;
+语句 B；
+SET INSERT_ID=1;
+语句 A；
+```
+
+你看，在备库上语句 B 用到的 INSERT_ID 依然是 2，跟主库相同。
+
+因此，即使两个 INSERT 语句在主备库的执行顺序不同，自增主键字段的值也不会不一致。
+
+## 45 | 自增id用完怎么办？
+
+### 表定义自增值 id
+
+表定义的自增值达到上限后的逻辑是：再申请下一个 id 时，得到的值保持不变。
+
+我们可以通过下面这个语句序列验证一下：
+
+```mysql
+create table t(id int unsigned auto_increment primary key) auto_increment=4294967295;
+insert into t values(null);
+// 成功插入一行 4294967295
+show create table t;
+/* CREATE TABLE `t` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=4294967295;
+*/
+ 
+insert into t values(null);
+//Duplicate entry '4294967295' for key 'PRIMARY'
+```
+
+第一个 insert 语句插入数据成功后，这个表的 AUTO_INCREMENT 没有改变（还是 4294967295），就导致了第二个 insert 语句又拿到相同的自增 id 值，再试图执行插入语句，报主键冲突错误。
+
+### InnoDB 系统自增 row_id
+
+如果你创建的 InnoDB 表没有指定主键，那么 InnoDB 会给你创建一个不可见的，长度为 6 个字节的 row_id。InnoDB 维护了一个全局的 dict_sys.row_id 值，所有无主键的 InnoDB 表，每插入一行数据，都将当前的 dict_sys.row_id 值作为要插入数据的 row_id，然后把 dict_sys.row_id 的值加 1。
+
+实际上，在代码实现时 row_id 是一个长度为 8 字节的无符号长整型 (bigint unsigned)。但是，InnoDB 在设计时，给 row_id 留的只是 6 个字节的长度，这样写到数据表中时只放了最后 6 个字节，所以 row_id 能写到数据表中的值，就有两个特征：
+
+1. row_id 写入表中的值范围，是从 0 到 248-1；
+2. 当 dict_sys.row_id=248时，如果再有插入数据的行为要来申请 row_id，拿到以后再取最后 6 个字节的话就是 0。
+
+也就是说，写入表的 row_id 是从 0 开始到 248-1。达到上限后，下一个值就是 0，然后继续循环。
+
+在 InnoDB 逻辑里，申请到 row_id=N 后，就将这行数据写入表中；如果表中已经存在 row_id=N 的行，新写入的行就会覆盖原有的行。
+
+### Xid
+
+MySQL 内部维护了一个全局变量 global_query_id，每次执行语句的时候将它赋值给 Query_id，然后给这个变量加 1。如果当前语句是这个事务执行的第一条语句，那么 MySQL 还会同时把 Query_id 赋值给这个事务的 Xid。  
+而 global_query_id 是一个纯内存变量，重启之后就清零了。所以你就知道了，在同一个数据库实例中，不同事务的 Xid 也是有可能相同的。
+
+但是 MySQL 重启之后会重新生成新的 binlog 文件，这就保证了，同一个 binlog 文件里，Xid 一定是惟一的。
+
+虽然 MySQL 重启不会导致同一个 binlog 里面出现两个相同的 Xid，但是如果 global_query_id 达到上限后，就会继续从 0 开始计数。从理论上讲，还是就会出现同一个 binlog 里面出现相同 Xid 的场景。
+
+因为 global_query_id 定义的长度是 8 个字节，这个自增值的上限是 264-1。要出现这种情况，必须是下面这样的过程：
+
+1. 执行一个事务，假设 Xid 是 A；
+2. 接下来执行 264次查询语句，让 global_query_id 回到 A；
+3. 再启动一个事务，这个事务的 Xid 也是 A。
+
+### Innodb trx_id
+
+Xid 是由 server 层维护的。InnoDB 内部使用 Xid，就是为了能够在 InnoDB 事务和 server 之间做关联。但是，InnoDB 自己的 trx_id，是另外维护的。
+
+InnoDB 内部维护了一个 max_trx_id 全局变量，每次需要申请一个新的 trx_id 时，就获得 max_trx_id 的当前值，然后并将 max_trx_id 加 1。
+
+**InnoDB 数据可见性的核心思想是**：每一行数据都记录了更新它的 trx_id，当一个事务读到一行数据的时候，判断这个数据是否可见的方法，就是通过事务的一致性视图与这行数据的 trx_id 做对比。
+
+看一个事务现场：
+![image](https://mail.wangkekai.cn/1614608094309.jpg)
+
+session B 里，我从 innodb_trx 表里查出的这两个字段，第二个字段 trx_mysql_thread_id 就是线程 id。显示线程 id，是为了说明这两次查询看到的事务对应的线程 id 都是 5，也就是 session A 所在的线程。
+
+1. 在 T1 时刻，trx_id 的值其实就是 0。而这个很大的数，只是显示用的。一会儿我会再和你说说这个数据的生成逻辑。
+2. 直到 session A 在 T3 时刻执行 insert 语句的时候，InnoDB 才真正分配了 trx_id。所以，T4 时刻，session B 查到的这个 trx_id 的值就是 1289。
+
+需要注意的是，除了显而易见的修改类语句外，如果在 select 语句后面加上 for update，这个事务也不是只读事务。
+
+实验的时候发现不止加 1。这是因为：
+
+1. update 和 delete 语句除了事务本身，还涉及到标记删除旧数据，也就是要把数据放到 purge 队列里等待后续物理删除，这个操作也会把 max_trx_id+1， 因此在一个事务中至少加 2；
+2. InnoDB 的后台操作，比如表的索引信息统计这类操作，也是会启动内部事务的，因此你可能看到，trx_id 值并不是按照加 1 递增的。
+
+**T2 时刻查到的这个很大的数字是怎么来的呢？**  
+其实，这个数字是每次查询的时候由系统临时计算出来的。它的算法是：把当前事务的 trx 变量的指针地址转成整数，再加上 248。使用这个算法，就可以保证以下两点：
+
+1. 因为同一个只读事务在执行期间，它的指针地址是不会变的，所以不论是在 innodb_trx 还是在 innodb_locks 表里，同一个只读事务查出来的 trx_id 就会是一样的。
+2. 如果有并行的多个只读事务，每个事务的 trx 变量的指针地址肯定不同。这样，不同的并发只读事务，查出来的 trx_id 就是不同的。
+
+**为什么还要再加上 248呢？**
+
+在显示值里面加上 248，目的是要保证只读事务显示的 trx_id 值比较大，正常情况下就会区别于读写事务的 id。但是，trx_id 跟 row_id 的逻辑类似，定义长度也是 8 个字节。因此，在理论上还是可能出现一个读写事务与一个只读事务显示的 trx_id 相同的情况。不过这个概率很低，并且也没有什么实质危害，可以不管它。
+
+另一个问题是，**只读事务不分配 trx_id，有什么好处呢？**
+
+- 一个好处是，这样做可以减小事务视图里面活跃事务数组的大小。因为当前正在运行的只读事务，是不影响数据的可见性判断的。所以，在创建事务的一致性视图时，InnoDB 就只需要拷贝读写事务的 trx_id。
+- 另一个好处是，可以减少 trx_id 的申请次数。在 InnoDB 里，即使你只是执行一个普通的 select 语句，在执行过程中，也是要对应一个只读事务的。所以只读事务优化后，普通的查询语句不需要申请 trx_id，就大大减少了并发事务申请 trx_id 的锁冲突。
+
+由于只读事务不分配 trx_id，一个自然而然的结果就是 trx_id 的增加速度变慢了。
+
+但是，max_trx_id 会持久化存储，重启也不会重置为 0，那么从理论上讲，只要一个 MySQL 服务跑得足够久，就可能出现 max_trx_id 达到 248-1 的上限，然后从 0 开始的情况。
+
+当达到这个状态后，MySQL 就会持续出现一个脏读的 bug，我们来复现一下这个 bug。
+
+首先我们需要把当前的 max_trx_id 先修改成 248-1。注意：这个 case 里使用的是可重复读隔离级别。具体的操作流程如下：
+![image](https://mail.wangkekai.cn/1614608279030.jpg)
+
+由于我们已经把系统的 max_trx_id 设置成了 248-1，所以在 session A 启动的事务 TA 的低水位就是 248-1。
+
+在 T2 时刻，session B 执行第一条 update 语句的事务 id 就是 248-1，而第二条 update 语句的事务 id 就是 0 了，这条 update 语句执行后生成的数据版本上的 trx_id 就是 0。
+
+在 T3 时刻，session A 执行 select 语句的时候，判断可见性发现，c=3 这个数据版本的 trx_id，小于事务 TA 的低水位，因此认为这个数据可见。
+
+那么，这个 bug 也是只存在于理论上吗？
+
+假设一个 MySQL 实例的 TPS 是每秒 50 万，持续这个压力的话，在 17.8 年后，就会出现这个情况。如果 TPS 更高，这个年限自然也就更短了。但是，从 MySQL 的真正开始流行到现在，恐怕都还没有实例跑到过这个上限。不过，这个 bug 是只要 MySQL 实例服务时间够长，就会必然出现的。
+
+### thread_id
+
+线程 id 才是 MySQL 中最常见的一种自增 id。平时我们在查各种现场的时候，show processlist 里面的第一列，就是 thread_id。
+
+thread_id 的逻辑很好理解：系统保存了一个全局变量 thread_id_counter，每新建一个连接，就将 thread_id_counter 赋值给这个新连接的线程变量。
+
+thread_id_counter 定义的大小是 4 个字节，因此达到 232-1 后，它就会重置为 0，然后继续增加。但是，你不会在 show processlist 里看到两个相同的 thread_id。
+
+这，是因为 MySQL 设计了一个唯一数组的逻辑，给新线程分配 thread_id 的时候，逻辑代码是这样的：
+
+```mysql
+do {
+  new_id= thread_id_counter++;
+} while (!thread_ids.insert_unique(new_id).second);
+```
