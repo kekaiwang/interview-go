@@ -13,7 +13,7 @@ GoLang/PHP 面试整理
 ## 数据库
 
 - [MySql](https://github.com/kekaiwang/interview-go/blob/main/doc/mysql.md)
-- Redis
+- [Redis](https://github.com/kekaiwang/interview-go/blob/main/doc/redis.md)
 
 ## 网络
 
