@@ -4,7 +4,7 @@
 
 字符串结构使用非常广泛，**一个常见的用途就是缓存用户信息**。我们将用户信息结构体使用  JSON 序列化成字符串，然后将序列化后的字符串塞进 Redis 来缓存。同样，取用户信息会经过一次反序列化的过程。
 
- Redis 的字符串是动态字符串，是可以修改的字符串，内部结构实现上类似于 Java 的 ArrayList，采用预分配冗余空间的方式来减少内存的频繁分配，如图中所示，<u>内部为当前字符串实际分配的空间  capacity 一般要高于实际字符串长度 len</u>。  
+Redis 的字符串是动态字符串，是可以修改的字符串，内部结构实现上类似于 Java 的 ArrayList，采用预分配冗余空间的方式来减少内存的频繁分配，如图中所示，<u>内部为当前字符串实际分配的空间  capacity 一般要高于实际字符串长度 len</u>。  
 <span style="color:red">当字符串长度小于 1M 时，扩容都是加倍现有的空间，如果超过 1M，扩容时一次只会多扩 1M 的空间。需要注意的是字符串最大长度为 512M</span>。
 > 创建字符串时  len 和  capacity 一样长，不会多分配冗余空间，这是因为绝大多数场景下我们不会使用  append 操作来修改字符串
 
@@ -39,7 +39,7 @@ OK
 (error) ERR increment or decrement would overflow
 ```
 
-#### 过期和set命令扩展
+### 过期和set命令扩展
 
 ```redis
 // 过期
@@ -99,7 +99,7 @@ redis.expire_at(key, random.randint(86400) + expire_ts)
 
 > **++字符串是由多个字节组成，每个字节又是由 8 个 bit 组成++**，如此便可以将一个字符串看成很多 bit 的组合，这便是  bitmap「位图」数据结构
 
-####  string内部结构
+#### string内部结构
 
 <u>Redis 中的字符串是可以修改的字符串，在内存中它是以字节数组的形式存在的。</u>  
 我们知道 C 语言里面的字符串标准形式是以 NULL 作为结束符，但是在 Redis 里面字符串不是这么表示的。因为要获取 NULL 结尾的字符串的长度使用的是 strlen 标准库函数，这个函数的算法复杂度是 O(n)，它需要对字节数组进行遍历扫描，作为单线程的 Redis 表示承受不起。
@@ -123,7 +123,7 @@ capacity **表示所分配数组的长度**，len **表示字符串的实际长�
 
 ##### embstr vs raw
 
- Redis 的字符串有两种存储方式，在长度特别短时，使用  emb 形式存储  (embeded)，当长度超过 44 时，使用  raw 形式存储。
+Redis 的字符串有两种存储方式，在长度特别短时，使用  emb 形式存储  (embeded)，当长度超过 44 时，使用  raw 形式存储。
 
 ![image](https://mail.wangkekai.cn/9528D65C-6E40-4157-9797-280B11D23E1A.png)
 
@@ -159,7 +159,7 @@ Redis 的列表相当于 Java 语言里面的 LinkedList，<font color=red>注�
 (nil)
 ```
 
- index 相当于 Java 链表的 get(int index)方法，它需要对链表进行遍历，性能随着参数 index增大而变差。
+index 相当于 Java 链表的 get(int index)方法，它需要对链表进行遍历，性能随着参数 index增大而变差。
 
 trim 和字面上的含义不太一样，个人觉得它叫 lretain(保留) 更合适一些，因为  ltrim 跟的两个参数 start_index和end_index定义了一个区间，在这个区间内的值，ltrim 要保留，区间之外统统砍掉。我们可以通过 ltrim来实现一个定长的链表，这一点非常有用。
 
@@ -185,7 +185,7 @@ OK
 (integer) 0
 ```
 
-##### 快速列表
+### 快速列表
 
 如果再深入一点，你会发现 Redis 底层存储的还不是一个简单的 linkedlist，而是称之为快速链表 quicklist 的一个结构。
 
@@ -220,13 +220,13 @@ struct ziplist<T> {
 
 > 压缩列表为了支持双向遍历，所以才会有 ztail_offset这个字段，用来快速定位到最后一个元素，然后倒着遍历。
 
-##### 增加元素
+### 增加元素
 
 因为 ziplist 都是紧凑存储，没有冗余空间 (对比一下 Redis 的字符串结构)。意味着插入一个新的元素就需要调用 realloc 扩展内存。取决于内存分配器算法和当前的 ziplist 内存大小，realloc 可能会重新分配新的内存空间，并将之前的内容一次性拷贝到新的地址，也可能在原有的地址上进行扩展，这时就不需要进行旧内容的内存拷贝。
 
 如果 ziplist 占据内存太大，重新分配内存和拷贝内存就会有很大的消耗。所以 <font color=red>ziplist</font> 不适合存储大型字符串，存储的元素也不宜过多。
 
-#####  IntSet 小整数集合
+### IntSet 小整数集合
 
 当 set 集合容纳的元素都是整数并且元素个数较小时，Redis 会使用 intset 来存储结合元素。intset 是紧凑的数组结构，同时支持 16 位、32 位和 64 位整数。
 
@@ -238,9 +238,9 @@ struct intset<T> {
 }
 ```
 
-#### 快速列表
+### 快速列表
 
- Redis 早期版本存储  list 列表数据结构使用的是压缩列表 ziplist 和普通的双向链表 linkedlist ，也就是元素少时用 ziplist，元素多时用 linkedlist。
+Redis 早期版本存储  list 列表数据结构使用的是压缩列表 ziplist 和普通的双向链表 linkedlist ，也就是元素少时用 ziplist，元素多时用 linkedlist。
 
 考虑到链表的附加空间相对太高，prev 和 next 指针就要占去 16 个字节 (64bit 系统的指针是 8 个字节)，另外每个节点的内存都是单独分配，会加剧内存的碎片化，影响内存管理效率。后续版本对列表数据结构进行了改造，使用 quicklist 代替了 ziplist 和 linkedlist。
 
@@ -254,16 +254,16 @@ Value at:0x7fec2dc2bde0 refcount:1 encoding:quicklist serializedlength:31 lru:61
 **注意观察上面输出字段 encoding 的值。 quicklist 是 ziplist 和 linkedlist 的混合体，它将  linkedlist 按段切分，每一段使用 ziplist 来紧凑存储，多个 ziplist 之间使用双向指针串接起来。**
 ![image](https://mail.wangkekai.cn/7AAB35D9-BBDB-46C0-879F-04746234203D.png)
 
-##### 每个 ziplist 存多少元素？
+### 每个 ziplist 存多少元素？
 
 <font color=red>quicklist</font> 内部默认单个 ziplist 长度为 8k 字节，超出了这个字节数，就会新起一个 ziplist。ziplist 的长度由配置参数 list-max-ziplist-size决定。
 
-##### 压缩深度
+### 压缩深度
 
 ![image](https://mail.wangkekai.cn/71ABE178-6788-4362-90F7-EB1F74495E9E.png)
 quicklist 默认的压缩深度是 0，也就是不压缩。压缩的实际深度由配置参数 list-compress-depth决定。为了支持快速的 push/pop 操作，quicklist 的首尾两个 ziplist 不压缩，此时深度就是 1。如果深度为 2，就表示 quicklist 的首尾第一个 ziplist 以及首尾第二个 ziplist 都不压缩。
 
-## 3.  hash - 字典
+## 3. hash - 字典
 
 Redis 的字典相当于 Java 语言里面的 HashMap，它是<font color=red>无序字典</font>。内部实现结构上同 Java 的 HashMap 也是一致的，**<u>同样的数组 + 链表二维结构。第一维 hash 的数组位置碰撞时，就会将碰撞的元素使用链表串接起来</u>**。
 ![image](https://mail.wangkekai.cn/999C4B1B-8CD5-42E5-BF26-74022C9B2326.png)
@@ -305,7 +305,7 @@ OK
 > hincrby user-laoqian age 1
 ```
 
-####  dict - 内部结构
+### dict - 内部结构
 
 dict 是 Redis 服务器中出现最为频繁的复合型数据结构，除了 hash 结构的数据会用到字典外，**++整个  Redis 数据库的所有  key 和  value 也组成了一个全局字典++**，还有带过期时间的 key 集合也是一个字典。  
 **<u>zset 集合中存储 value 和 score 值的映射关系也是通过 dict 结构实现的。</u>**
@@ -327,19 +327,19 @@ struct zset {
 
 <font color=red>dict</font> 结构内部包含两个 hashtable，通常情况下只有一个 hashtable 是有值的。但是在 dict 扩容缩容时，需要分配新的 hashtable，然后进行渐进式搬迁，这时候两个 hashtable 存储的分别是旧的 hashtable 和新的  hashtable。待搬迁结束后，旧的 hashtable 被删除，新的 hashtable 取而代之。
 
-##### 渐进式  rehash
+### 渐进式 rehash
 
 大字典的扩容是比较耗时间的，需要重新申请新的数组，然后将旧字典所有链表中的元素重新挂接到新的数组下面，这是一个 O(n) 级别的操作，作为单线程的Redis表示很难承受这样耗时的过程。步子迈大了会扯着蛋，所以Redis使用渐进式 rehash 小步搬迁。虽然慢一点，但是肯定可以搬完。
 
-##### 查找过程
+### 查找过程
 
 插入和删除操作都依赖于查找，先必须把元素找到，才可以进行数据结构的修改操作。hashtable 的元素是在第二维的链表上，所以首先我们得想办法定位出元素在哪个链表上。
 
-##### 扩容条件
+### 扩容条件
 
 <font clor=red>正常情况下，当 hash 表中元素的个数等于第一维数组的长度时，就会开始扩容，扩容的新数组是原数组大小的 2 倍。</font>不过如果 Redis 正在做 bgsave，为了减少内存页的过多分离 (Copy On Write)，Redis 尽量不去扩容 (dict_can_resize)，但是如果 hash 表已经非常满了，元素的个数已经达到了第一维数组长度的 5 倍  (dict_force_resize_ratio)，说明 hash 表已经过于拥挤了，这个时候就会强制扩容。
 
-##### 缩容条件
+### 缩容条件
 
 当 hash 表因为元素的逐渐删除变得越来越稀疏时，Redis 会对 hash 表进行缩容来减少 hash 表的第一维数组空间占用。  
 <font color=red>缩容的条件是元素个数低于数组长度的 10%。缩容不会考虑 Redis 是否正在做 bgsave。</font>
@@ -372,7 +372,7 @@ set 结构可以用来存储活动中奖的用户 ID，因为有去重功能，�
 "java"
 ```
 
-## 5.  zset - 有序集合
+## 5. zset - 有序集合
 
 它类似于 Java 的 SortedSet 和 HashMap 的结合体，一方面它是一个 set，保证了内部 value 的唯一性，另一方面它可以给每个  value 赋予一个 score，代表这个 value 的排序权重。它的内部实现用的是一种叫做 「跳跃列表」的数据结构。
 
@@ -542,6 +542,7 @@ Redis 提供了位图统计指令 bitcount 和位图查找指令 bitpos， bitco
 Redis 提供了  HyperLogLog 数据结构就是用来解决这种统计问题的。 HyperLogLog 提供不精确的去重计数方案，虽然不精确但是也不是非常不精确，标准误差是 0.81%，这样的精确度已经可以满足上面的 UV 统计需求了。
 
 HyperLogLog 数据结构是 Redis 的高级数据结构，它非常有用，但是令人感到意外的是，使用过它的人非常少。
+
 ### 使用方法
 
 HyperLogLog 提供了两个指令  pfadd 和  pfcount，根据字面意义很好理解，**一个是增加计数，一个是获取计数**。
@@ -664,7 +665,7 @@ GeoHash 算法将二维的经纬度数据映射到一维的整数，这样所有
 
 在使用 Redis 进行 Geo 查询时，我们要时刻想到它的内部结构实际上只是一个 zset(skiplist)。通过 zset 的 score 排序就可以得到坐标附近的其它元素 (实际情况要复杂一些，不过这样理解足够了)，通过将 score 还原成坐标值就可以得到元素的原始坐标。
 
-###  Geo 基本指令使用
+### Geo 基本指令使用
 
 #### 增加
 
@@ -776,7 +777,7 @@ georadiusbymember 指令是最为关键的指令，它可以用来查询指定�
 
 1. 没有  offset、limit 参数，一次性吐出所有满足条件的  key，万一实例中有几百 w 个 key 满足条件，当你看到满屏的字符串刷的没有尽头时，你就知道难受了。
 2. keys 算法是遍历算法，复杂度是 O(n)，如果实例中有千万级以上的 key，这个指令就会导致 Redis 服务卡顿，所有读写 Redis 的其它的指令都会被延后甚至会超时报错，因为  Redis 是单线程程序，顺序执行所有指令，其它指令必须等到当前的  keys 指令执行完了才可以继续。
-3.  
+
 > scan 相比  keys 具备有以下特点:
 
 1. 复杂度虽然也是  O(n)，但是它是通过游标分步进行的，不会阻塞线程;
@@ -787,7 +788,7 @@ georadiusbymember 指令是最为关键的指令，它可以用来查询指定�
 1. 遍历的过程中如果有数据修改，改动后的数据能不能遍历到是不确定的;
 1. 单次返回的结果是空的并不意味着遍历结束，而要看返回的游标值是否为零;
 
-#### 基础使用
+### 基础使用
 
 scan 参数提供了三个参数，第一个是 cursor 整数值，第二个是 key 的正则模式，第三个是遍历的 limit hint。第一次遍历时，cursor 值为 0，然后将返回结果中第一个整数值作为下一次遍历的 cursor。一直遍历到返回的 cursor 值为 0 时结束。
 
@@ -982,6 +983,7 @@ Redis 同样也提供了另外两种策略，<font color=red>一个是永不 fsy
 于是在  Redis 重启的时候，<font color=red>可以先加载 rdb 的内容，然后再重放增量 AOF 日志就可以完全替代之前的 AOF 全量文件重放，重启效率因此大幅得到提升。</font>
 
 ## 18. 管道
+
 ### redis 的消息交互
 
 ![image](https://mail.wangkekai.cn/166AC5E1-3578-4428-8CC9-9A8904D404CE.png)
@@ -1023,6 +1025,7 @@ QUEUED
 ```
 
 所有的指令在  exec 之前不执行，**而是缓存在服务器的一个事务队列中**，服务器一旦收到 exec 指令，才开执行整个事务队列，执行完毕后一次性返回所有指令的运行结果。因为 Redis 的单线程特性，它不用担心自己在执行队列的时候被其它指令打搅，可以保证他们能得到的「原子性」执行。
+
 ### 原子性
 
 ```redis
@@ -1061,7 +1064,7 @@ pipe.incr("books")
 values = pipe.execute()
 ```
 
-###  watch
+### watch
 
 有多个客户端会并发进行操作。我们可以通过 Redis 的==分布式锁==来避免冲突，这是一个很好的解决方案。**分布式锁是一种悲观锁**，那是不是可以使用乐观锁的方式来解决冲突呢？
 
@@ -1112,6 +1115,7 @@ print p.get_message()
 客户端发起订阅命令后，Redis 会立即给予一个反馈消息通知订阅成功。因为有网络传输延迟，在 subscribe 命令发出后，需要休眠一会，再通过 get_message 才能拿到反馈消息。客户端接下来执行发布命令，发布了一条消息。同样因为网络延迟，在 publish 命令发出后，需要休眠一会，再通过 get_message 才能拿到发布的消息。**如果当前没有消息， get_message 会返回空，告知当前没有消息，所以它不是阻塞的**。
 
 Redis PubSub 的生产者和消费者是不同的连接，也就是上面这个例子实际上使用了两个 Redis 的连接。这是必须的，因为 Redis 不允许连接在 subscribe 等待消息时还要进行其它的操作。
+
 ### 模式订阅
 
 简化订阅的繁琐，redis 提供了模式订阅功能  Pattern Subscribe，这样就可以一次订阅多个主题，即使生产者新增加了同模式的主题，消费者也可以立即收到消息。
@@ -1156,6 +1160,7 @@ Redis 的 ziplist 是一个紧凑的字节数组结构，如下图所示，每�
 Redis 虽然无法保证立即回收已经删除的  key 的内存，但是它会重用那些尚未回收的空闲内存。这就好比电影院里虽然人走了，但是座位还在，下一波观众来了，直接坐就行。而操作系统回收内存就好比把座位都给搬走了。
 
 ## 22. 主从同步
+
 ### CAP 原理
 
 - C - Consistent ，一致性
@@ -1336,9 +1341,11 @@ Redis Stream 的结构如上图所示，它有一个消息链表，将所有加�
 消费者 (Consumer) 内部会有个状态变量 pending_ids，它记录了当前已经被客户端读取的消息，但是还没有 ack。如果客户端没有 ack，这个变量里面的消息 ID 会越来越多，一旦某个消息被 ack，它就开始减少。这个 pending_ids 变量在 Redis 官方被称之为 PEL，也就是 Pending Entries List，这是一个很核心的数据结构，它用来确保客户端至少消费了消息一次，而不会在网络传输的中途丢失了没处理。
 
 ### 消息 ID
+
 消息 ID 的形式是 timestampInMillis-sequence，例如 1527846880572-5，它表示当前的消息在毫米时间戳 1527846880572 时产生，并且是该毫秒内产生的第 5 条消息。消息 ID 可以由服务器自动生成，也可以由客户端自己指定，但是形式必须是整数-整数，而且必须是后面加入的消息的 ID 要大于前面的消息 ID。
 
 ### 消息内容
+
 消息内容就是键值对，形如 hash 结构的键值对。
 
 ### 增删改查
@@ -1521,6 +1528,7 @@ OK
 ```
 
 ### 消费
+
 Stream 提供了 xreadgroup 指令可以进行消费组的组内消费，需要提供消费组名称、消费者名称和起始消息 ID。它同 xread 一样，也可以阻塞等待新消息。读到新消息后，对应的消息 ID 就会进入消费者的 PEL(正在处理的消息) 结构里，客户端处理完毕后使用 xack 指令通知服务器，本条消息已经处理完毕，该消息 ID 就会从 PEL 中移除。
 
 ```redis
