@@ -1837,7 +1837,7 @@ OK
 ### 异步队列
 
 主线程将对象的引用从「大树」中摘除后，会将这个 key 的内存回收操作包装成一个任务，塞进异步任务队列，后台线程会从这个异步队列中取任务。任务队列被主线程和异步线程同时操作，所以必须是一个线程安全的队列。
-![image](https://user-gold-cdn.xitu.io/2018/8/2/164fa17ba5f2d88e?imageView2/0/w/1280/h/960/ignore-error/1)
+![image](https://mail.wangkekai.cn/7428EC70-56B7-46E4-8A16-6F5683DD751A.png)
 
 不是所有的 unlink 操作都会延后处理，如果对应 key 所占用的内存很小，延后处理就没有必要了，这时候 Redis 会将对应的 key 内存立即回收，跟 del 指令一样。
 
@@ -1856,3 +1856,15 @@ Redis4.0 为这些删除点也带来了异步删除机制，打开这些点需�
 3. lazyfree-lazy-expire key 过期删除
 4. lazyfree-lazy-server-del rename 指令删除 destKey
 
+## 29. 隔墙有耳 —— Redis 安全通信
+
+### spiped 原理
+
+spiped 会在客户端和服务器各启动一个 spiped 进程。
+![image](https://mail.wangkekai.cn/5DDEE410-C225-4425-AA8B-6D72181995BE.png)
+
+左边的 spiped 进程 A 负责接受来自 Redis Client 发送过来的请求数据，加密后传送到右边的 spiped 进程 B。spiped B 将接收到的数据解密后传递到 Redis Server。然后 Redis Server 再走一个反向的流程将响应回复给 Redis Client。
+
+每一个 spiped 进程都会有一个监听端口 (server socket) 用来接收数据，同时还会作为一个客户端 (socket client) 将数据转发到目标地址。
+
+spiped 进程需要成对出现，相互之间需要使用相同的共享密钥来加密消息。
