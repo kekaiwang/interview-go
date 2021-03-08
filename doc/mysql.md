@@ -597,7 +597,7 @@ DDL 之前是要拿 MDL 写锁的，这样还能叫 Online DDL 吗？
 
 ### Online 和 inplace
 
-根据表 A 重建出来的数据是放在“tmp_file”里的，这个临时文件是 InnoDB 在内部创建出来的。整个 DDL 过程都在 InnoDB 内部完成。**对于 server 层来说，没有把数据挪动到临时表，是一个“原地”操作，这就是“inplace”名称的来源。**
+根据表 A 重建出来的数据是放在 “tmp_file” 里的，这个临时文件是 InnoDB 在内部创建出来的。整个 DDL 过程都在 InnoDB 内部完成。**对于 server 层来说，没有把数据挪动到临时表，是一个“原地”操作，这就是 “inplace” 名称的来源。**
 
 我们重建表的这个语句 alter table t engine=InnoDB，其实隐含的意思是：
 
