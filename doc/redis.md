@@ -64,7 +64,7 @@ OK
 OK
 ```
 
-#### 过期的 key 集合
+### 过期的 key 集合
 
 redis 会将每个设置了过期时间的  key 放入到一个独立的字典中，以后会定时遍历这个字典来删除到期的 key。  
 除了<font color=red>定时遍历之外，它还会使用惰性策略来删除过期的 key。</font>
@@ -99,7 +99,7 @@ redis.expire_at(key, random.randint(86400) + expire_ts)
 
 > **++字符串是由多个字节组成，每个字节又是由 8 个 bit 组成++**，如此便可以将一个字符串看成很多 bit 的组合，这便是  bitmap「位图」数据结构
 
-#### string内部结构
+### string内部结构
 
 <u>Redis 中的字符串是可以修改的字符串，在内存中它是以字节数组的形式存在的。</u>  
 我们知道 C 语言里面的字符串标准形式是以 NULL 作为结束符，但是在 Redis 里面字符串不是这么表示的。因为要获取 NULL 结尾的字符串的长度使用的是 strlen 标准库函数，这个函数的算法复杂度是 O(n)，它需要对字节数组进行遍历扫描，作为单线程的 Redis 表示承受不起。
@@ -121,13 +121,48 @@ capacity **表示所分配数组的长度**，len **表示字符串的实际长�
 
 > 上面的  SDS 结构使用了范型  T，为什么不直接用  int 呢，这是因为当字符串比较短时， len 和  capacity 可以使用  byte 和  short 来表示，Redis 为了对内存做极致的优化，不同长度的字符串使用不同的结构体来表示。
 
-##### embstr vs raw
+### embstr vs raw
 
 Redis 的字符串有两种存储方式，在长度特别短时，使用  emb 形式存储  (embeded)，当长度超过 44 时，使用  raw 形式存储。
+
+所有的 Redis 对象都有下面的这个结构头:
+
+```c++
+struct RedisObject {
+    int4 type; // 4bits
+    int4 encoding; // 4bits
+    int24 lru; // 24bits
+    int32 refcount; // 4bytes
+    void *ptr; // 8bytes，64-bit system
+} robj;
+```
+
+接着我们再看 SDS 结构体的大小，在字符串比较小时，SDS 对象头的大小是capacity+3，至少是 3。意味着分配一个字符串的最小空间占用为 19 字节 (16+3)。
+
+```c++
+struct SDS {
+    int8 capacity; // 1byte
+    int8 len; // 1byte
+    int8 flags; // 1byte
+    byte[] content; // 内联数组，长度为 capacity
+}
+```
 
 ![image](https://mail.wangkekai.cn/9528D65C-6E40-4157-9797-280B11D23E1A.png)
 
 embstr 存储形式是这样一种存储形式，它将 RedisObject 对象头和  SDS 对象连续存在一起，使用 malloc 方法一次分配。而  raw 存储形式不一样，它需要两次 malloc，两个对象头在内存地址上一般是不连续的。
+
+而内存分配器 jemalloc/tcmalloc 等分配内存大小的单位都是 2、4、8、16、32、64 等等，为了能容纳一个完整的 embstr 对象，jemalloc 最少会分配 32 字节的空间，如果字符串再稍微长一点，那就是 64 字节的空间。如果总体超出了 64 字节，Redis 认为它是一个大字符串，不再使用 emdstr 形式存储，而该用 raw 形式。
+
+前面我们提到 SDS 结构体中的 content 中的字符串是以字节\0结尾的字符串，之所以多出这样一个字节，是为了便于直接使用 glibc 的字符串处理函数，以及为了便于字符串的调试打印输出。
+
+![image](https://mail.wangkekai.cn/349F73F3-2726-45AD-8AFB-A10AC276BBB4.png)
+
+看上面这张图可以算出，留给 content 的长度最多只有 45(64-19) 字节了。字符串又是以\0结尾，所以 embstr 最大能容纳的字符串长度就是 44。
+
+### 扩容策略
+
+字符串在长度小于 1M 之前，扩容空间采用加倍策略，也就是保留 100% 的冗余空间。当长度超过 1M 之后，为了避免加倍后的冗余空间过大而导致浪费，每次扩容只会多分配 1M 大小的冗余空间。
 
 ## 2.  list - 列表
 
@@ -135,7 +170,7 @@ Redis 的列表相当于 Java 语言里面的 LinkedList，<font color=red>注�
 **<u>这意味着  list 的插入和删除操作非常快，时间复杂度为  O(1)，但是索引定位很慢，时间复杂度为  O(n)，这点让人非常意外</u>**。
 
 当列表弹出了最后一个元素之后，该数据结构自动被删除，内存被回收。  
-**++Redis 的列表结构常用来做异步队列使用++**。将需要延后处理的任务结构体序列化成字符串塞进 Redis 的列表，另一个线程从这个列表中轮询数据进行处理。
+**Redis 的列表结构常用来做异步队列使用**。将需要延后处理的任务结构体序列化成字符串塞进 Redis 的列表，另一个线程从这个列表中轮询数据进行处理。
 
 ```redis
 // 队列 - 右进左出
@@ -191,7 +226,7 @@ OK
 
 <u>首先在列表元素较少的情况下会使用一块连续的内存存储</u>，这个结构是 ziplist，也即是<font color=red>压缩列表</font>。**它将所有的元素紧挨着一起存储，<u>分配的是一块连续的内存</u>**。当数据量比较多的时候才会改成 quicklist。因为普通的链表需要的附加指针空间太大，会比较浪费空间，而且会加重内存的碎片化。比如这个列表里存的只是 int 类型的数据，结构上还需要两个额外的指针 prev 和 next 。所以 Redis 将链表和 ziplist 结合起来组成了 quicklist。也就是将多个 ziplist 使用双向指针串起来使用。这样既满足了快速的插入删除性能，又不会出现太大的空间冗余。
 
-#### 压缩列表
+### 压缩列表
 
 Redis 为了节约内存空间使用， zset 和  hash 容器对象在元素个数较少的时候，采用 压缩列表 (ziplist) 进行存储。  
 **<u>压缩列表是一块连续的内存空间，元素之间紧挨着存储，没有任何冗余空隙</u>。**
@@ -241,6 +276,21 @@ struct intset<T> {
 ### 快速列表
 
 Redis 早期版本存储  list 列表数据结构使用的是压缩列表 ziplist 和普通的双向链表 linkedlist ，也就是元素少时用 ziplist，元素多时用 linkedlist。
+
+```c++
+// 链表的节点
+struct listNode<T> {
+    listNode* prev;
+    listNode* next;
+    T value;
+}
+// 链表
+struct list {
+    listNode *head;
+    listNode *tail;
+    long length;
+}
+```
 
 考虑到链表的附加空间相对太高，prev 和 next 指针就要占去 16 个字节 (64bit 系统的指针是 8 个字节)，另外每个节点的内存都是单独分配，会加剧内存的碎片化，影响内存管理效率。后续版本对列表数据结构进行了改造，使用 quicklist 代替了 ziplist 和 linkedlist。
 
@@ -307,7 +357,7 @@ OK
 
 ### dict - 内部结构
 
-dict 是 Redis 服务器中出现最为频繁的复合型数据结构，除了 hash 结构的数据会用到字典外，**++整个  Redis 数据库的所有  key 和  value 也组成了一个全局字典++**，还有带过期时间的 key 集合也是一个字典。  
+dict 是 Redis 服务器中出现最为频繁的复合型数据结构，除了 hash 结构的数据会用到字典外，**整个 Redis 数据库的所有 key 和 value 也组成了一个全局字典**，还有带过期时间的 key 集合也是一个字典。  
 **<u>zset 集合中存储 value 和 score 值的映射关系也是通过 dict 结构实现的。</u>**
 
 ```redis
@@ -335,6 +385,25 @@ struct zset {
 
 插入和删除操作都依赖于查找，先必须把元素找到，才可以进行数据结构的修改操作。hashtable 的元素是在第二维的链表上，所以首先我们得想办法定位出元素在哪个链表上。
 
+```c
+func get(key) {
+    let index = hash_func(key) % size;
+    let entry = table[index];
+    while(entry != NULL) {
+        if entry.key == target {
+            return entry.value;
+        }
+        entry = entry.next;
+    }
+}
+```
+
+值得注意的是代码中的hash_func，它会将 key 映射为一个整数，不同的 key 会被映射成分布比较均匀散乱的整数。只有 hash 值均匀了，整个 hashtable 才是平衡的，所有的二维链表的长度就不会差距很远，查找算法的性能也就比较稳定。
+
+### hash 函数
+
+hashtable 的性能好不好完全取决于 hash 函数的质量。hash 函数如果可以将 key 打散的比较均匀，那么这个 hash 函数就是个好函数。Redis 的字典默认的 hash 函数是 siphash。siphash 算法即使在输入 key 很小的情况下，也可以产生随机性特别好的输出，而且它的性能也非常突出。对于 Redis 这样的单线程来说，字典数据结构如此普遍，字典操作也会非常频繁，hash 函数自然也是越快越好。
+
 ### 扩容条件
 
 <font clor=red>正常情况下，当 hash 表中元素的个数等于第一维数组的长度时，就会开始扩容，扩容的新数组是原数组大小的 2 倍。</font>不过如果 Redis 正在做 bgsave，为了减少内存页的过多分离 (Copy On Write)，Redis 尽量不去扩容 (dict_can_resize)，但是如果 hash 表已经非常满了，元素的个数已经达到了第一维数组长度的 5 倍  (dict_force_resize_ratio)，说明 hash 表已经过于拥挤了，这个时候就会强制扩容。
@@ -343,6 +412,10 @@ struct zset {
 
 当 hash 表因为元素的逐渐删除变得越来越稀疏时，Redis 会对 hash 表进行缩容来减少 hash 表的第一维数组空间占用。  
 <font color=red>缩容的条件是元素个数低于数组长度的 10%。缩容不会考虑 Redis 是否正在做 bgsave。</font>
+
+### set 的结构
+
+Redis 里面 set 的结构底层实现也是字典，只不过所有的 value 都是 NULL，其它的特性和字典一模一样。
 
 ## 4.  set - 集合
 
@@ -430,6 +503,45 @@ zset 内部的排序功能是通过「跳跃列表」数据结构来实现的，
 跳跃列表采取一个随机策略来决定新元素可以兼职到第几层。
 
 首先 L0 层肯定是 100% 了，L1 层只有 50% 的概率，L2 层只有 25% 的概率，L3 层只有 12.5% 的概率，一直随机到最顶层 L31 层。绝大多数元素都过不了几层，只有极少数元素可以深入到顶层。列表中的元素越多，能够深入的层次就越深，能进入到顶层的概率就会越大。
+
+### 查找过程
+
+设想如果跳跃列表只有一层会怎样？插入删除操作需要定位到相应的位置节点 (定位到最后一个比「我」小的元素，也就是第一个比「我」大的元素的前一个)，定位的效率肯定比较差，复杂度将会是 O(n)，因为需要挨个遍历。也许你会想到二分查找，但是二分查找的结构只能是有序数组。跳跃列表有了多层结构之后，这个定位的算法复杂度将会降到 O(lg(n))。
+![image](https://mail.wangkekai.cn/4272EE6D-0DAF-4B09-8503-D0595D21CED7.png)
+
+我们要定位到那个紫色的 kv，需要从 header 的最高层开始遍历找到第一个节点 (最后一个比「我」小的元素)，然后从这个节点开始降一层再遍历找到第二个节点 (最后一个比「我」小的元素)，然后一直降到最底层进行遍历就找到了期望的节点 (最底层的最后一个比我「小」的元素)。
+
+我们将中间经过的一系列节点称之为「搜索路径」，它是从最高层一直到最底层的每一层最后一个比「我」小的元素节点列表。
+
+有了这个搜索路径，我们就可以插入这个新节点了。不过这个插入过程也不是特别简单。因为新插入的节点到底有多少层，得有个算法来分配一下，跳跃列表使用的是随机算法。
+
+### 随机层数
+
+对于每一个新插入的节点，都需要调用一个随机算法给它分配一个合理的层数。直观上期望的目标是 50% 的 Level1，25% 的 Level2，12.5% 的 Level3，一直到最顶层2^-63，因为这里每一层的晋升概率是 50%。
+
+不过 Redis 标准源码中的晋升概率只有 25%，也就是代码中的 ZSKIPLIST_P 的值。所以官方的跳跃列表更加的扁平化，层高相对较低，在单个层上需要遍历的节点数量会稍多一点。
+
+也正是因为层数一般不高，所以遍历的时候从顶层开始往下遍历会非常浪费。跳跃列表会记录一下当前的最高层数maxLevel，遍历时从这个 maxLevel 开始遍历性能就会提高很多。
+
+### 元素排名是怎么算出来的？
+
+Redis 在 skiplist 的 forward 指针上进行了优化，给每一个 forward 指针都增加了 span 属性，span 是「跨度」的意思，表示从当前层的当前节点沿着 forward 指针跳到下一个节点中间跳过多少个节点。Redis 在插入删除操作时会小心翼翼地更新 span 值的大小。
+
+```c++
+struct zslforward {
+  zslnode* item;
+  long span;  // 跨度
+}
+
+struct zslnode {
+  String value;
+  double score;
+  zslforward*[] forwards;  // 多层连接指针
+  zslnode* backward;  // 回溯指针
+}
+```
+
+这样当我们要计算一个元素的排名时，只需要将「搜索路径」上的经过的所有节点的跨度 span 值进行叠加就可以算出元素的最终 rank 值。
 
 ## 6. 分布式锁
 
@@ -2414,3 +2526,54 @@ SYNC done. Logging commands from master.
 
 从库连上主库的第一件事是全量同步，所以看到上面的指令卡顿这很正常，待首次全量同步完成后，就会输出增量的 aof 日志。
 
+## 33. 破旧立新 —— 探索「紧凑列表」内部
+
+Redis 5.0 又引入了一个新的数据结构 listpack，它是对 ziplist 结构的改进，在存储空间上会更加节省，而且结构上也比 ziplist 要精简。它的整体形式和 ziplist 还是比较接近的，如果你认真阅读了 ziplist 的内部结构分析，那么 listpack 也是比较容易理解的。
+
+```c++
+struct listpack<T> {
+    int32 total_bytes; // 占用的总字节数
+    int16 size; // 元素个数
+    T[] entries; // 紧凑排列的元素列表
+    int8 end; // 同 zlend 一样，恒为 0xFF
+}
+```
+
+![image](https://mail.wangkekai.cn/DE875CCC-11B6-4B3F-B413-1C616CA2EB99.png)
+
+首先这个 listpack 跟 ziplist 的结构几乎一摸一样，只是少了一个zltail_offset字段。ziplist 通过这个字段来定位出最后一个元素的位置，用于逆序遍历。不过 listpack 可以通过其它方式来定位出最后一个元素的位置，所以zltail_offset 字段就省掉了。
+
+```c++
+struct lpentry {
+    int<var> encoding;
+    optional byte[] content;
+    int<var> length;
+}
+```
+
+元素的结构和 ziplist 的元素结构也很类似，都是包含三个字段。不同的是长度字段放在了元素的尾部，而且存储的不是上一个元素的长度，是当前元素的长度。正是因为长度放在了尾部，所以可以省去了 zltail_offset 字段来标记最后一个元素的位置，这个位置可以通过 total_bytes 字段和最后一个元素的长度字段计算出来。
+
+长度字段使用 varint 进行编码，不同于 skiplist 元素长度的编码为 1 个字节或者 5 个字节，listpack 元素长度的编码可以是 1、2、3、4、5 个字节。同 UTF8 编码一样，它通过字节的最高为是否为 1 来决定编码的长度。
+
+![image](https://mail.wangkekai.cn/3ED7D7B2-BED4-4743-B0AF-102AD1FEBD6F.png)
+
+同样，Redis 为了让 listpack 元素支持很多类型，它对 encoding 字段也进行了较为复杂的设计。
+
+1. 0xxxxxxx 表示非负小整数，可以表示0~127。
+2. 10xxxxxx 表示小字符串，长度范围是0~63，content字段为字符串的内容。
+3. 110xxxxx yyyyyyyy 表示有符号整数，范围是-2048~2047。
+4. 1110xxxx yyyyyyyy 表示中等长度的字符串，长度范围是0~4095，content字段为字符串的内容。
+5. 11110000 aaaaaaaa bbbbbbbb cccccccc dddddddd 表示大字符串，四个字节表示长度，content字段为字符串内容。
+6. 11110001 aaaaaaaa bbbbbbbb 表示 2 字节有符号整数。
+7. 11110010 aaaaaaaa bbbbbbbb cccccccc 表示 3 字节有符号整数。
+8. 11110011 aaaaaaaa bbbbbbbb cccccccc dddddddd 表示 4 字节有符号整数。
+9. 11110011 aaaaaaaa ... hhhhhhhh 表示 8 字节有符号整数。
+10. 11111111 表示 listpack 的结束符号，也就是0xFF。
+
+### 级联更新
+
+listpack 的设计彻底消灭了 ziplist 存在的级联更新行为，元素与元素之间完全独立，不会因为一个元素的长度变长就导致后续的元素内容会受到影响。
+
+### 取代 ziplist
+
+listpack 的设计的目的是用来取代 ziplist，不过当下还没有做好替换 ziplist 的准备，因为有很多兼容性的问题需要考虑，ziplist 在 Redis 数据结构中使用太广泛了，替换起来复杂度会非常之高。它目前只使用在了新增加的 Stream 数据结构中。
