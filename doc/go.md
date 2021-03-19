@@ -436,37 +436,37 @@ slice := vauto[:]
 
 ```go
 func typecheck1(n *Node, top int) (res *Node) {
-	switch n.Op {
-	...
-	case OMAKE:
-		args := n.List.Slice()
+    switch n.Op {
+    ...
+    case OMAKE:
+        args := n.List.Slice()
 
-		i := 1
-		switch t.Etype {
-		case TSLICE:
-			if i >= len(args) {
-				yyerror("missing len argument to make(%v)", t)
-				return n
-			}
+        i := 1
+        switch t.Etype {
+        case TSLICE:
+            if i >= len(args) {
+                yyerror("missing len argument to make(%v)", t)
+                return n
+            }
 
-			l = args[i]
-			i++
-			var r *Node
-			if i < len(args) {
-				r = args[i]
-			}
-			...
-			if Isconst(l, CTINT) && r != nil && Isconst(r, CTINT) && l.Val().U.(*Mpint).Cmp(r.Val().U.(*Mpint)) > 0 {
-				yyerror("len larger than cap in make(%v)", t)
-				return n
-			}
+            l = args[i]
+            i++
+            var r *Node
+            if i < len(args) {
+                r = args[i]
+            }
+            ...
+            if Isconst(l, CTINT) && r != nil && Isconst(r, CTINT) && l.Val().U.(*Mpint).Cmp(r.Val().U.(*Mpint)) > 0 {
+                yyerror("len larger than cap in make(%v)", t)
+                return n
+            }
 
-			n.Left = l
-			n.Right = r
-			n.Op = OMAKESLICE
-		}
-	...
-	}
+            n.Left = l
+            n.Right = r
+            n.Op = OMAKESLICE
+        }
+    ...
+    }
 }
 ```
 
@@ -488,16 +488,16 @@ n := arr[:3]
 
 ```go
 func makeslice(et *_type, len, cap int) unsafe.Pointer {
-	mem, overflow := math.MulUintptr(et.size, uintptr(cap))
-	if overflow || mem > maxAlloc || len < 0 || len > cap {
-		mem, overflow := math.MulUintptr(et.size, uintptr(len))
-		if overflow || mem > maxAlloc || len < 0 {
-			panicmakeslicelen()
-		}
-		panicmakeslicecap()
-	}
+    mem, overflow := math.MulUintptr(et.size, uintptr(cap))
+    if overflow || mem > maxAlloc || len < 0 || len > cap {
+        mem, overflow := math.MulUintptr(et.size, uintptr(len))
+        if overflow || mem > maxAlloc || len < 0 {
+            panicmakeslicelen()
+        }
+        panicmakeslicecap()
+    }
 
-	return mallocgc(mem, et, true)
+    return mallocgc(mem, et, true)
 }
 ```
 
@@ -517,21 +517,21 @@ func makeslice(et *_type, len, cap int) unsafe.Pointer {
 
 ```go
 func typecheck1(n *Node, top int) (res *Node) {
-	switch n.Op {
-	...
-	case OSLICEHEADER:
-	switch 
-		t := n.Type
-		n.Left = typecheck(n.Left, ctxExpr)
-		l := typecheck(n.List.First(), ctxExpr)
-		c := typecheck(n.List.Second(), ctxExpr)
-		l = defaultlit(l, types.Types[TINT])
-		c = defaultlit(c, types.Types[TINT])
+    switch n.Op {
+    ...
+    case OSLICEHEADER:
+    switch 
+        t := n.Type
+        n.Left = typecheck(n.Left, ctxExpr)
+        l := typecheck(n.List.First(), ctxExpr)
+        c := typecheck(n.List.Second(), ctxExpr)
+        l = defaultlit(l, types.Types[TINT])
+        c = defaultlit(c, types.Types[TINT])
 
-		n.List.SetFirst(l)
-		n.List.SetSecond(c)
-	...
-	}
+        n.List.SetFirst(l)
+        n.List.SetSecond(c)
+    ...
+    }
 }
 ```
 
@@ -539,9 +539,9 @@ func typecheck1(n *Node, top int) (res *Node) {
 
 ```go
 type SliceHeader struct {
-	Data uintptr
-	Len  int
-	Cap  int
+    Data uintptr
+    Len  int
+    Cap  int
 }
 ```
 
@@ -553,19 +553,19 @@ type SliceHeader struct {
 
 ```go
 func (s *state) expr(n *Node) *ssa.Value {
-	switch n.Op {
-	case OLEN, OCAP:
-		switch {
-		case n.Left.Type.IsSlice():
-			op := ssa.OpSliceLen
-			if n.Op == OCAP {
-				op = ssa.OpSliceCap
-			}
-			return s.newValue1(op, types.Types[TINT], s.expr(n.Left))
-		...
-		}
-	...
-	}
+    switch n.Op {
+    case OLEN, OCAP:
+        switch {
+        case n.Left.Type.IsSlice():
+            op := ssa.OpSliceLen
+            if n.Op == OCAP {
+                op = ssa.OpSliceCap
+            }
+            return s.newValue1(op, types.Types[TINT], s.expr(n.Left))
+        ...
+        }
+    ...
+    }
 }
 ```
 
@@ -581,16 +581,16 @@ func (s *state) expr(n *Node) *ssa.Value {
 
 ```go
 func (s *state) expr(n *Node) *ssa.Value {
-	switch n.Op {
-	case OINDEX:
-		switch {
-		case n.Left.Type.IsSlice():
-			p := s.addr(n, false)
-			return s.load(n.Left.Type.Elem(), p)
-		...
-		}
-	...
-	}
+    switch n.Op {
+    case OINDEX:
+        switch {
+        case n.Left.Type.IsSlice():
+            p := s.addr(n, false)
+            return s.load(n.Left.Type.Elem(), p)
+        ...
+        }
+    ...
+    }
 }
 ```
 
@@ -644,22 +644,22 @@ newlen = len + 3
 
 ```go
 func growslice(et *_type, old slice, cap int) slice {
-	newcap := old.cap
-	doublecap := newcap + newcap
-	if cap > doublecap {
-		newcap = cap
-	} else {
-		if old.len < 1024 {
-			newcap = doublecap
-		} else {
-			for 0 < newcap && newcap < cap {
-				newcap += newcap / 4
-			}
-			if newcap <= 0 {
-				newcap = cap
-			}
-		}
-	}
+    newcap := old.cap
+    doublecap := newcap + newcap
+    if cap > doublecap {
+        newcap = cap
+    } else {
+        if old.len < 1024 {
+            newcap = doublecap
+        } else {
+            for 0 < newcap && newcap < cap {
+                newcap += newcap / 4
+            }
+            if newcap <= 0 {
+                newcap = cap
+            }
+        }
+    }
 }
 ```
 
@@ -673,25 +673,25 @@ func growslice(et *_type, old slice, cap int) slice {
 
 ```go
     var overflow bool
-	var lenmem, newlenmem, capmem uintptr
-	switch {
-	case et.size == 1:
-		lenmem = uintptr(old.len)
-		newlenmem = uintptr(cap)
-		capmem = roundupsize(uintptr(newcap))
-		overflow = uintptr(newcap) > maxAlloc
-		newcap = int(capmem)
-	case et.size == sys.PtrSize:
-		lenmem = uintptr(old.len) * sys.PtrSize
-		newlenmem = uintptr(cap) * sys.PtrSize
-		capmem = roundupsize(uintptr(newcap) * sys.PtrSize)
-		overflow = uintptr(newcap) > maxAlloc/sys.PtrSize
-		newcap = int(capmem / sys.PtrSize)
-	case isPowerOfTwo(et.size):
-		...
-	default:
-		...
-	}
+    var lenmem, newlenmem, capmem uintptr
+    switch {
+    case et.size == 1:
+        lenmem = uintptr(old.len)
+        newlenmem = uintptr(cap)
+        capmem = roundupsize(uintptr(newcap))
+        overflow = uintptr(newcap) > maxAlloc
+        newcap = int(capmem)
+    case et.size == sys.PtrSize:
+        lenmem = uintptr(old.len) * sys.PtrSize
+        newlenmem = uintptr(cap) * sys.PtrSize
+        capmem = roundupsize(uintptr(newcap) * sys.PtrSize)
+        overflow = uintptr(newcap) > maxAlloc/sys.PtrSize
+        newcap = int(capmem / sys.PtrSize)
+    case isPowerOfTwo(et.size):
+        ...
+    default:
+        ...
+    }
 ```
 
 `runtime.roundupsize` 函数会将待申请的内存向上取整，取整时会使用 `runtime.class_to_size` 数组，使用该数组中的整数可以提高内存的分配效率并减少碎片，我们会在内存分配一节详细介绍该数组的作用：
@@ -712,30 +712,30 @@ var class_to_size = [_NumSizeClasses]uint16{
 在默认情况下，我们会将目标容量和元素大小相乘得到占用的内存。如果计算新容量时发生了内存溢出或者请求内存超过上限，就会直接崩溃退出程序，不过这里为了减少理解的成本，将相关的代码省略了。
 
 ```go
-	var overflow bool
-	var newlenmem, capmem uintptr
-	switch {
-	...
-	default:
-		lenmem = uintptr(old.len) * et.size
-		newlenmem = uintptr(cap) * et.size
-		capmem, _ = math.MulUintptr(et.size, uintptr(newcap))
-		capmem = roundupsize(capmem)
-		newcap = int(capmem / et.size)
-	}
-	...
-	var p unsafe.Pointer
-	if et.kind&kindNoPointers != 0 {
-		p = mallocgc(capmem, nil, false)
-		memclrNoHeapPointers(add(p, newlenmem), capmem-newlenmem)
-	} else {
-		p = mallocgc(capmem, et, true)
-		if writeBarrier.enabled {
-			bulkBarrierPreWriteSrcOnly(uintptr(p), uintptr(old.array), lenmem)
-		}
-	}
-	memmove(p, old.array, lenmem)
-	return slice{p, old.len, newcap}
+    var overflow bool
+    var newlenmem, capmem uintptr
+    switch {
+    ...
+    default:
+        lenmem = uintptr(old.len) * et.size
+        newlenmem = uintptr(cap) * et.size
+        capmem, _ = math.MulUintptr(et.size, uintptr(newcap))
+        capmem = roundupsize(capmem)
+        newcap = int(capmem / et.size)
+    }
+    ...
+    var p unsafe.Pointer
+    if et.kind&kindNoPointers != 0 {
+        p = mallocgc(capmem, nil, false)
+        memclrNoHeapPointers(add(p, newlenmem), capmem-newlenmem)
+    } else {
+        p = mallocgc(capmem, et, true)
+        if writeBarrier.enabled {
+            bulkBarrierPreWriteSrcOnly(uintptr(p), uintptr(old.array), lenmem)
+        }
+    }
+    memmove(p, old.array, lenmem)
+    return slice{p, old.len, newcap}
 }
 ```
 
@@ -768,25 +768,25 @@ if a.ptr != b.ptr {
 
 ```go
 func slicecopy(to, fm slice, width uintptr) int {
-	if fm.len == 0 || to.len == 0 {
-		return 0
-	}
-	n := fm.len
-	if to.len < n {
-		n = to.len
-	}
-	if width == 0 {
-		return n
-	}
-	...
+    if fm.len == 0 || to.len == 0 {
+        return 0
+    }
+    n := fm.len
+    if to.len < n {
+        n = to.len
+    }
+    if width == 0 {
+        return n
+    }
+    ...
 
-	size := uintptr(n) * width
-	if size == 1 {
-		*(*byte)(to.array) = *(*byte)(fm.array)
-	} else {
-		memmove(to.array, fm.array, size)
-	}
-	return n
+    size := uintptr(n) * width
+    if size == 1 {
+        *(*byte)(to.array) = *(*byte)(fm.array)
+    } else {
+        memmove(to.array, fm.array, size)
+    }
+    return n
 }
 ```
 
