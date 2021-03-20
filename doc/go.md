@@ -982,7 +982,7 @@ hash["5"] = 6
 
 这种初始化的方式与的数组和切片几乎完全相同，由此看来集合类型的初始化在 Go 语言中有着相同的处理逻辑。
 
-一旦哈希表中元素的数量超过了 25 个，编译器会创建两个数组分别存储键和值，这些键值对会通过如下所示的 for 循环加入哈希：
+<font color=red>一旦哈希表中元素的数量超过了 25 个，编译器会创建两个数组分别存储键和值</font>，这些键值对会通过如下所示的 for 循环加入哈希：
 
 ```go
 hash := make(map[string]int, 26)
@@ -996,6 +996,111 @@ for i := 0; i < len(vstak); i++ {
 这里展开的两个切片 `vstatk` 和 `vstatv` 还会被编辑器继续展开，具体的展开方式可以阅读上一节了解切片的初始化，不过无论使用哪种方法，使用字面量初始化的过程都会使用 Go 语言中的关键字 make 来创建新的哈希并通过最原始的 [] 语法向哈希追加元素。
 
 #### 运行时
+
+当创建的哈希被分配到栈上并且其容量小于 BUCKETSIZE = 8 时，Go 语言在编译阶段会使用如下方式快速初始化哈希，这也是编译器对小容量的哈希做的优化：
+
+```go
+var h *hmap
+var hv hmap
+var bv bmap
+h := &hv
+b := &bv
+h.buckets = b
+h.hash0 = fashtrand0()
+```
+
+除了上述特定的优化之外，**无论 make 是从哪里来的，只要我们使用 make 创建哈希，Go 语言编译器都会在类型检查期间将它们转换成 runtime.makemap，使用字面量初始化哈希也只是语言提供的辅助工具**，最后调用的都是 runtime.makemap：
+
+```go
+func makemap(t *maptype, hint int, h *hmap) *hmap {
+    mem, overflow := math.MulUintptr(uintptr(hint), t.bucket.size)
+    if overflow || mem > maxAlloc {
+        hint = 0
+    }
+
+    if h == nil {
+        h = new(hmap)
+    }
+    h.hash0 = fastrand()
+
+    B := uint8(0)
+    for overLoadFactor(hint, B) {
+        B++
+    }
+    h.B = B
+
+    if h.B != 0 {
+        var nextOverflow *bmap
+        h.buckets, nextOverflow = makeBucketArray(t, h.B, nil)
+        if nextOverflow != nil {
+            h.extra = new(mapextra)
+            h.extra.nextOverflow = nextOverflow
+        }
+    }
+    return h
+}
+```
+
+这个函数会按照下面的步骤执行：
+
+1. 计算哈希占用的内存是否溢出或者超出能分配的最大值；
+2. 调用 `runtime.fastrand` 获取一个随机的哈希种子；
+3. 根据传入的 `hint` 计算出需要的最小需要的桶的数量；
+4. 使用 `runtime.makeBucketArray` 创建用于保存桶的数组；
+
+`runtime.makeBucketArray` 会根据传入的 B 计算出的需要创建的桶数量并在内存中分配一片连续的空间用于存储数据：
+
+```go
+func makeBucketArray(t *maptype, b uint8, dirtyalloc unsafe.Pointer) (buckets unsafe.Pointer, nextOverflow *bmap) {
+	base := bucketShift(b)
+	nbuckets := base
+	if b >= 4 {
+		nbuckets += bucketShift(b - 4)
+		sz := t.bucket.size * nbuckets
+		up := roundupsize(sz)
+		if up != sz {
+			nbuckets = up / t.bucket.size
+		}
+	}
+
+	buckets = newarray(t.bucket, int(nbuckets))
+	if base != nbuckets {
+		nextOverflow = (*bmap)(add(buckets, base*uintptr(t.bucketsize)))
+		last := (*bmap)(add(buckets, (nbuckets-1)*uintptr(t.bucketsize)))
+		last.setoverflow(t, (*bmap)(buckets))
+	}
+	return buckets, nextOverflow
+}
+```
+
+- 当桶的数量小于 2^4 时，由于数据较少、使用溢出桶的可能性较低，会省略创建的过程以减少额外开销；
+- 当桶的数量多于 2^4 时，会额外创建 2^𝐵−4 个溢出桶；
+
+根据上述代码，我们能确定在正常情况下，正常桶和溢出桶在内存中的存储空间是连续的，只是被 `runtime.hmap` 中的不同字段引用，当溢出桶数量较多时会通过 `runtime.newobject` 创建新的溢出桶。
+
+### 3.3.4 读写操作
+
+哈希表的访问一般都是通过下标或者遍历进行的：
+
+```go
+_ = hash[key]
+
+for k, v := range hash {
+    // k, v
+}
+```
+
+这两种方式虽然都能读取哈希表的数据，但是使用的函数和底层原理完全不同。前者需要知道哈希的键并且一次只能获取单个键对应的值，而后者可以遍历哈希中的全部键值对，访问数据时也不需要预先知道哈希的键。
+
+数据结构的写一般指的都是增加、删除和修改，增加和修改字段都使用索引和赋值语句，而删除字典中的数据需要使用关键字 `delete`：
+
+```go
+hash[key] = value
+hash[key] = newValue
+delete(hash, key)
+```
+
+#### 访问
 
 
 
