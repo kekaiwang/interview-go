@@ -879,23 +879,23 @@ Go 语言运行时同时使用了多个数据结构组合表示哈希表，其�
 
 ```go
 type hmap struct {
-	count     int
-	flags     uint8
-	B         uint8
-	noverflow uint16
-	hash0     uint32
+    count     int
+    flags     uint8
+    B         uint8
+    noverflow uint16
+    hash0     uint32
 
-	buckets    unsafe.Pointer
-	oldbuckets unsafe.Pointer
-	nevacuate  uintptr
+    buckets    unsafe.Pointer
+    oldbuckets unsafe.Pointer
+    nevacuate  uintptr
 
-	extra *mapextra
+    extra *mapextra
 }
 
 type mapextra struct {
-	overflow    *[]*bmap
-	oldoverflow *[]*bmap
-	nextOverflow *bmap
+    overflow    *[]*bmap
+    oldoverflow *[]*bmap
+    nextOverflow *bmap
 }
 ```
 
@@ -914,7 +914,7 @@ type mapextra struct {
 
 ```go
 type bmap struct {
-	tophash [bucketCnt]uint8
+    tophash [bucketCnt]uint8
 }
 ```
 
@@ -936,7 +936,7 @@ type bmap struct {
 
 ### 3.3.3 初始化
 
-Go 语言初始化哈希的两种方法 — **通过字面量和运行时**
+Go 语言初始化哈希的两种方法 — **通过字面量和运行时**.
 
 #### 字面量
 
@@ -944,9 +944,9 @@ Go 语言初始化哈希的两种方法 — **通过字面量和运行时**
 
 ```go
 hash := map[string]int{
-	"1": 2,
-	"3": 4,
-	"5": 6,
+    "1": 2,
+    "3": 4,
+    "5": 6,
 }
 ```
 
@@ -1052,24 +1052,24 @@ func makemap(t *maptype, hint int, h *hmap) *hmap {
 
 ```go
 func makeBucketArray(t *maptype, b uint8, dirtyalloc unsafe.Pointer) (buckets unsafe.Pointer, nextOverflow *bmap) {
-	base := bucketShift(b)
-	nbuckets := base
-	if b >= 4 {
-		nbuckets += bucketShift(b - 4)
-		sz := t.bucket.size * nbuckets
-		up := roundupsize(sz)
-		if up != sz {
-			nbuckets = up / t.bucket.size
-		}
-	}
+    base := bucketShift(b)
+    nbuckets := base
+    if b >= 4 {
+        nbuckets += bucketShift(b - 4)
+        sz := t.bucket.size * nbuckets
+        up := roundupsize(sz)
+        if up != sz {
+            nbuckets = up / t.bucket.size
+        }
+    }
 
-	buckets = newarray(t.bucket, int(nbuckets))
-	if base != nbuckets {
-		nextOverflow = (*bmap)(add(buckets, base*uintptr(t.bucketsize)))
-		last := (*bmap)(add(buckets, (nbuckets-1)*uintptr(t.bucketsize)))
-		last.setoverflow(t, (*bmap)(buckets))
-	}
-	return buckets, nextOverflow
+    buckets = newarray(t.bucket, int(nbuckets))
+    if base != nbuckets {
+        nextOverflow = (*bmap)(add(buckets, base*uintptr(t.bucketsize)))
+        last := (*bmap)(add(buckets, (nbuckets-1)*uintptr(t.bucketsize)))
+        last.setoverflow(t, (*bmap)(buckets))
+    }
+    return buckets, nextOverflow
 }
 ```
 
@@ -1119,28 +1119,28 @@ v, ok := hash[key] // => v, ok := mapaccess2(maptype, hash, &key)
 
 ```go
 func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-	alg := t.key.alg
-	hash := alg.hash(key, uintptr(h.hash0))
-	m := bucketMask(h.B)
-	b := (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
-	top := tophash(hash)
-bucketloop:
-	for ; b != nil; b = b.overflow(t) {
-		for i := uintptr(0); i < bucketCnt; i++ {
-			if b.tophash[i] != top {
-				if b.tophash[i] == emptyRest {
-					break bucketloop
-				}
-				continue
-			}
-			k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
-			if alg.equal(key, k) {
-				v := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
-				return v
-			}
-		}
-	}
-	return unsafe.Pointer(&zeroVal[0])
+    alg := t.key.alg
+    hash := alg.hash(key, uintptr(h.hash0))
+    m := bucketMask(h.B)
+    b := (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
+    top := tophash(hash)
+    bucketloop:
+    for ; b != nil; b = b.overflow(t) {
+        for i := uintptr(0); i < bucketCnt; i++ {
+            if b.tophash[i] != top {
+                if b.tophash[i] == emptyRest {
+                    break bucketloop
+                }
+                continue
+            }
+            k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+            if alg.equal(key, k) {
+                v := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
+                return v
+            }
+        }
+    }
+    return unsafe.Pointer(&zeroVal[0])
 }
 ```
 
@@ -1154,24 +1154,24 @@ bucketloop:
 
 ```go
 func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
-	...
-bucketloop:
-	for ; b != nil; b = b.overflow(t) {
-		for i := uintptr(0); i < bucketCnt; i++ {
-			if b.tophash[i] != top {
-				if b.tophash[i] == emptyRest {
-					break bucketloop
-				}
-				continue
-			}
-			k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
-			if alg.equal(key, k) {
-				v := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
-				return v, true
-			}
-		}
-	}
-	return unsafe.Pointer(&zeroVal[0]), false
+    ...
+    bucketloop:
+    for ; b != nil; b = b.overflow(t) {
+        for i := uintptr(0); i < bucketCnt; i++ {
+            if b.tophash[i] != top {
+                if b.tophash[i] == emptyRest {
+                    break bucketloop
+                }
+                continue
+            }
+            k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+            if alg.equal(key, k) {
+                v := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
+                return v, true
+            }
+        }
+    }
+    return unsafe.Pointer(&zeroVal[0]), false
 }
 ```
 
@@ -1185,50 +1185,50 @@ bucketloop:
 
 ```go
 func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-	alg := t.key.alg
-	hash := alg.hash(key, uintptr(h.hash0))
+    alg := t.key.alg
+    hash := alg.hash(key, uintptr(h.hash0))
 
-	h.flags ^= hashWriting
+    h.flags ^= hashWriting
 
-again:
-	bucket := hash & bucketMask(h.B)
-	b := (*bmap)(unsafe.Pointer(uintptr(h.buckets) + bucket*uintptr(t.bucketsize)))
-	top := tophash(hash)
+    again:
+    bucket := hash & bucketMask(h.B)
+    b := (*bmap)(unsafe.Pointer(uintptr(h.buckets) + bucket*uintptr(t.bucketsize)))
+    top := tophash(hash)
 ```
 
 然后通过遍历比较桶中存储的 `tophash` 和键的哈希，如果找到了相同结果就会返回目标位置的地址。其中 `inserti` 表示目标元素在桶中的索引，`insertk` 和 val 分别表示键值对的地址，获得目标地址之后会通过算术计算寻址获得键值对 k 和 val：
 
 ```go
     var inserti *uint8
-	var insertk unsafe.Pointer
-	var val unsafe.Pointer
-bucketloop:
-	for {
-		for i := uintptr(0); i < bucketCnt; i++ {
-			if b.tophash[i] != top {
-				if isEmpty(b.tophash[i]) && inserti == nil {
-					inserti = &b.tophash[i]
-					insertk = add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
-					val = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
-				}
-				if b.tophash[i] == emptyRest {
-					break bucketloop
-				}
-				continue
-			}
-			k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
-			if !alg.equal(key, k) {
-				continue
-			}
-			val = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
-			goto done
-		}
-		ovf := b.overflow(t)
-		if ovf == nil {
-			break
-		}
-		b = ovf
-	}
+    var insertk unsafe.Pointer
+    var val unsafe.Pointer
+    bucketloop:
+    for {
+        for i := uintptr(0); i < bucketCnt; i++ {
+            if b.tophash[i] != top {
+                if isEmpty(b.tophash[i]) && inserti == nil {
+                    inserti = &b.tophash[i]
+                    insertk = add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+                    val = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
+                }
+                if b.tophash[i] == emptyRest {
+                    break bucketloop
+                }
+                continue
+            }
+            k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+            if !alg.equal(key, k) {
+                continue
+            }
+            val = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
+            goto done
+        }
+        ovf := b.overflow(t)
+        if ovf == nil {
+            break
+        }
+        b = ovf
+    }
 ```
 
 上述的 for 循环会依次遍历正常桶和溢出桶中存储的数据，整个过程会分别判断 tophash 是否相等、key 是否相等，遍历结束后会从循环中跳出。
@@ -1239,18 +1239,18 @@ bucketloop:
 
 ```go
     if inserti == nil {
-		newb := h.newoverflow(t, b)
-		inserti = &newb.tophash[0]
-		insertk = add(unsafe.Pointer(newb), dataOffset)
-		val = add(insertk, bucketCnt*uintptr(t.keysize))
-	}
+        newb := h.newoverflow(t, b)
+        inserti = &newb.tophash[0]
+        insertk = add(unsafe.Pointer(newb), dataOffset)
+        val = add(insertk, bucketCnt*uintptr(t.keysize))
+    }
 
-	typedmemmove(t.key, insertk, key)
-	*inserti = top
-	h.count++
+    typedmemmove(t.key, insertk, key)
+    *inserti = top
+    h.count++
 
 done:
-	return val
+    return val
 }
 ```
 
@@ -1271,12 +1271,12 @@ done:
 
 ```go
 func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-	...
-	if !h.growing() && (overLoadFactor(h.count+1, h.B) || tooManyOverflowBuckets(h.noverflow, h.B)) {
-		hashGrow(t, h)
-		goto again
-	}
-	...
+    ...
+    if !h.growing() && (overLoadFactor(h.count+1, h.B) || tooManyOverflowBuckets(h.noverflow, h.B)) {
+        hashGrow(t, h)
+        goto again
+    }
+    ...
 }
 ```
 
@@ -1292,24 +1292,24 @@ runtime.mapassign 函数会在以下两种情况发生时触发哈希的扩容�
 
 ```go
 func hashGrow(t *maptype, h *hmap) {
-	bigger := uint8(1)
-	if !overLoadFactor(h.count+1, h.B) {
-		bigger = 0
-		h.flags |= sameSizeGrow
-	}
-	oldbuckets := h.buckets
-	newbuckets, nextOverflow := makeBucketArray(t, h.B+bigger, nil)
+    bigger := uint8(1)
+    if !overLoadFactor(h.count+1, h.B) {
+        bigger = 0
+        h.flags |= sameSizeGrow
+    }
+    oldbuckets := h.buckets
+    newbuckets, nextOverflow := makeBucketArray(t, h.B+bigger, nil)
 
-	h.B += bigger
-	h.flags = flags
-	h.oldbuckets = oldbuckets
-	h.buckets = newbuckets
-	h.nevacuate = 0
-	h.noverflow = 0
+    h.B += bigger
+    h.flags = flags
+    h.oldbuckets = oldbuckets
+    h.buckets = newbuckets
+    h.nevacuate = 0
+    h.noverflow = 0
 
-	h.extra.oldoverflow = h.extra.overflow
-	h.extra.overflow = nil
-	h.extra.nextOverflow = nextOverflow
+    h.extra.oldoverflow = h.extra.overflow
+    h.extra.overflow = nil
+    h.extra.nextOverflow = nextOverflow
 }
 ```
 
@@ -1321,19 +1321,19 @@ func hashGrow(t *maptype, h *hmap) {
 
 ```go
 func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
-	b := (*bmap)(add(h.oldbuckets, oldbucket*uintptr(t.bucketsize)))
-	newbit := h.noldbuckets()
-	if !evacuated(b) {
-		var xy [2]evacDst
-		x := &xy[0]
-		x.b = (*bmap)(add(h.buckets, oldbucket*uintptr(t.bucketsize)))
-		x.k = add(unsafe.Pointer(x.b), dataOffset)
-		x.v = add(x.k, bucketCnt*uintptr(t.keysize))
+    b := (*bmap)(add(h.oldbuckets, oldbucket*uintptr(t.bucketsize)))
+    newbit := h.noldbuckets()
+    if !evacuated(b) {
+        var xy [2]evacDst
+        x := &xy[0]
+        x.b = (*bmap)(add(h.buckets, oldbucket*uintptr(t.bucketsize)))
+        x.k = add(unsafe.Pointer(x.b), dataOffset)
+        x.v = add(x.k, bucketCnt*uintptr(t.keysize))
 
-		y := &xy[1]
-		y.b = (*bmap)(add(h.buckets, (oldbucket+newbit)*uintptr(t.bucketsize)))
-		y.k = add(unsafe.Pointer(y.b), dataOffset)
-		y.v = add(y.k, bucketCnt*uintptr(t.keysize))
+        y := &xy[1]
+        y.b = (*bmap)(add(h.buckets, (oldbucket+newbit)*uintptr(t.bucketsize)))
+        y.k = add(unsafe.Pointer(y.b), dataOffset)
+        y.v = add(y.k, bucketCnt*uintptr(t.keysize))
 ```
 
 `runtime.evacuate` 会将一个旧桶中的数据分流到两个新桶，所以它会创建两个用于保存分配上下文的 `runtime.evacDst` 结构体，这两个结构体分别指向了一个新桶：
@@ -1343,35 +1343,35 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 **如果这是等量扩容，那么旧桶与新桶之间是一对一的关系，所以两个 runtime.evacDst 只会初始化一个**。而当哈希表的容量翻倍时，每个旧桶的元素会都分流到新创建的两个桶中，这里仔细分析一下分流元素的逻辑：
 
 ```go
-            for ; b != nil; b = b.overflow(t) {
-			k := add(unsafe.Pointer(b), dataOffset)
-			v := add(k, bucketCnt*uintptr(t.keysize))
-			for i := 0; i < bucketCnt; i, k, v = i+1, add(k, uintptr(t.keysize)), add(v, uintptr(t.valuesize)) {
-				top := b.tophash[i]
-				k2 := k
-				var useY uint8
-				hash := t.key.alg.hash(k2, uintptr(h.hash0))
-				if hash&newbit != 0 {
-					useY = 1
-				}
-				b.tophash[i] = evacuatedX + useY
-				dst := &xy[useY]
+        for ; b != nil; b = b.overflow(t) {
+        k := add(unsafe.Pointer(b), dataOffset)
+        v := add(k, bucketCnt*uintptr(t.keysize))
+        for i := 0; i < bucketCnt; i, k, v = i+1, add(k, uintptr(t.keysize)), add(v, uintptr(t.valuesize)) {
+            top := b.tophash[i]
+            k2 := k
+            var useY uint8
+            hash := t.key.alg.hash(k2, uintptr(h.hash0))
+            if hash&newbit != 0 {
+                useY = 1
+            }
+            b.tophash[i] = evacuatedX + useY
+            dst := &xy[useY]
 
-				if dst.i == bucketCnt {
-					dst.b = h.newoverflow(t, dst.b)
-					dst.i = 0
-					dst.k = add(unsafe.Pointer(dst.b), dataOffset)
-					dst.v = add(dst.k, bucketCnt*uintptr(t.keysize))
-				}
-				dst.b.tophash[dst.i&(bucketCnt-1)] = top
-				typedmemmove(t.key, dst.k, k)
-				typedmemmove(t.elem, dst.v, v)
-				dst.i++
-				dst.k = add(dst.k, uintptr(t.keysize))
-				dst.v = add(dst.v, uintptr(t.valuesize))
-			}
-		}
-		...
+            if dst.i == bucketCnt {
+                dst.b = h.newoverflow(t, dst.b)
+                dst.i = 0
+                dst.k = add(unsafe.Pointer(dst.b), dataOffset)
+                dst.v = add(dst.k, bucketCnt*uintptr(t.keysize))
+            }
+            dst.b.tophash[dst.i&(bucketCnt-1)] = top
+            typedmemmove(t.key, dst.k, k)
+            typedmemmove(t.elem, dst.v, v)
+            dst.i++
+            dst.k = add(dst.k, uintptr(t.keysize))
+            dst.v = add(dst.v, uintptr(t.valuesize))
+        }
+    }
+    ...
 }
 ```
 
@@ -1389,21 +1389,21 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 
 ```go
 func advanceEvacuationMark(h *hmap, t *maptype, newbit uintptr) {
-	h.nevacuate++
-	stop := h.nevacuate + 1024
-	if stop > newbit {
-		stop = newbit
-	}
-	for h.nevacuate != stop && bucketEvacuated(t, h, h.nevacuate) {
-		h.nevacuate++
-	}
-	if h.nevacuate == newbit { // newbit == # of oldbuckets
-		h.oldbuckets = nil
-		if h.extra != nil {
-			h.extra.oldoverflow = nil
-		}
-		h.flags &^= sameSizeGrow
-	}
+    h.nevacuate++
+    stop := h.nevacuate + 1024
+    if stop > newbit {
+        stop = newbit
+    }
+    for h.nevacuate != stop && bucketEvacuated(t, h, h.nevacuate) {
+        h.nevacuate++
+    }
+    if h.nevacuate == newbit { // newbit == # of oldbuckets
+        h.oldbuckets = nil
+        if h.extra != nil {
+            h.extra.oldoverflow = nil
+        }
+        h.flags &^= sameSizeGrow
+    }
 }
 ```
 
@@ -1411,22 +1411,22 @@ func advanceEvacuationMark(h *hmap, t *maptype, newbit uintptr) {
 
 ```go
 func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-	...
-	alg := t.key.alg
-	hash := alg.hash(key, uintptr(h.hash0))
-	m := bucketMask(h.B)
-	b := (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
-	if c := h.oldbuckets; c != nil {
-		if !h.sameSizeGrow() {
-			m >>= 1
-		}
-		oldb := (*bmap)(add(c, (hash&m)*uintptr(t.bucketsize)))
-		if !evacuated(oldb) {
-			b = oldb
-		}
-	}
+    ...
+    alg := t.key.alg
+    hash := alg.hash(key, uintptr(h.hash0))
+    m := bucketMask(h.B)
+    b := (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
+    if c := h.oldbuckets; c != nil {
+        if !h.sameSizeGrow() {
+            m >>= 1
+        }
+        oldb := (*bmap)(add(c, (hash&m)*uintptr(t.bucketsize)))
+        if !evacuated(oldb) {
+            b = oldb
+        }
+    }
 bucketloop:
-	...
+    ...
 }
 ```
 
@@ -1436,13 +1436,13 @@ bucketloop:
 
 ```go
 func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-	...
+    ...
 again:
-	bucket := hash & bucketMask(h.B)
-	if h.growing() {
-		growWork(t, h, bucket)
-	}
-	...
+    bucket := hash & bucketMask(h.B)
+    if h.growing() {
+        growWork(t, h, bucket)
+    }
+    ...
 }
 ```
 
@@ -1460,21 +1460,21 @@ again:
 
 ```go
 func walkexpr(n *Node, init *Nodes) *Node {
-	switch n.Op {
-	case ODELETE:
-		init.AppendNodes(&n.Ninit)
-		map_ := n.List.First()
-		key := n.List.Second()
-		map_ = walkexpr(map_, init)
-		key = walkexpr(key, init)
+    switch n.Op {
+    case ODELETE:
+        init.AppendNodes(&n.Ninit)
+        map_ := n.List.First()
+        key := n.List.Second()
+        map_ = walkexpr(map_, init)
+        key = walkexpr(key, init)
 
-		t := map_.Type
-		fast := mapfast(t)
-		if fast == mapslow {
-			key = nod(OADDR, key, nil)
-		}
-		n = mkcall1(mapfndel(mapdelete[fast], t), nil, init, typename(t), map_, key)
-	}
+        t := map_.Type
+        fast := mapfast(t)
+        if fast == mapslow {
+            key = nod(OADDR, key, nil)
+        }
+        n = mkcall1(mapfndel(mapdelete[fast], t), nil, init, typename(t), map_, key)
+    }
 }
 ```
 
@@ -1482,32 +1482,32 @@ func walkexpr(n *Node, init *Nodes) *Node {
 
 ```go
 func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
-	...
-	if h.growing() {
-		growWork(t, h, bucket)
-	}
-	...
+    ...
+    if h.growing() {
+        growWork(t, h, bucket)
+    }
+    ...
 search:
-	for ; b != nil; b = b.overflow(t) {
-		for i := uintptr(0); i < bucketCnt; i++ {
-			if b.tophash[i] != top {
-				if b.tophash[i] == emptyRest {
-					break search
-				}
-				continue
-			}
-			k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
-			k2 := k
-			if !alg.equal(key, k2) {
-				continue
-			}
-			*(*unsafe.Pointer)(k) = nil
-			v := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
-			*(*unsafe.Pointer)(v) = nil
-			b.tophash[i] = emptyOne
-			...
-		}
-	}
+    for ; b != nil; b = b.overflow(t) {
+        for i := uintptr(0); i < bucketCnt; i++ {
+            if b.tophash[i] != top {
+                if b.tophash[i] == emptyRest {
+                    break search
+                }
+                continue
+            }
+            k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+            k2 := k
+            if !alg.equal(key, k2) {
+                continue
+            }
+            *(*unsafe.Pointer)(k) = nil
+            v := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.valuesize))
+            *(*unsafe.Pointer)(v) = nil
+            b.tophash[i] = emptyOne
+            ...
+        }
+    }
 }
 ```
 
