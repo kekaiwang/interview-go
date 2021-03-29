@@ -1524,7 +1524,285 @@ search:
 
 **数组会占用一片连续的内存空间，而内存空间存储的字节共同组成了字符串，Go 语言中的字符串只是一个只读的字节数组**，下图展示了 "hello" 字符串在内存中的存储方式：
 
-![image]()
+![image](https://mail.wangkekai.cn/1617025688813.jpg)
+
+如果是代码中存在的字符串，编译器会将其标记成只读数据 `SRODATA`.
+
+只读只意味着字符串会分配到只读的内存空间，但是 Go 语言只是不支持直接修改 `string` 类型变量的内存空间，我们仍然可以通过在 `string` 和 `[]byte` 类型之间反复转换实现修改这一目的：
+
+1. 先将这段内存拷贝到堆或者栈上；
+2. 将变量的类型转换成 `[]byte` 后并修改字节数据；
+3. 将修改后的字节数组转换回 `string`；
+
+很多编程语言的字符串也都是不可变的，**这种不可变的特性可以保证我们不会引用到意外发生改变的值**，而因为 Go 语言的字符串可以作为哈希的键，所以如果哈希的键是可变的，不仅会增加哈希实现的复杂度，还可能会影响哈希的比较。
+
+### 3.4.1 数据结构
+
+字符串在 Go 语言中的接口其实非常简单，每一个字符串在运行时都会使用如下的 reflect.StringHeader 表示，其中包含指向字节数组的指针和数组的大小：
+
+```go
+type StringHeader struct {
+	Data uintptr
+	Len  int
+}
+```
+
+与切片的结构体相比，字符串只少了一个表示容量的 Cap 字段，而正是因为切片在 Go 语言的运行时表示与字符串高度相似，所以我们经常会说字符串是一个只读的切片类型。
+
+```go
+type SliceHeader struct {
+	Data uintptr
+	Len  int
+	Cap  int
+}
+```
+
+> 因为字符串作为只读的类型，我们并不会直接向字符串直接追加元素改变其本身的内存空间，**所有在字符串上的写入操作都是通过拷贝实现的**。
+
+### 4.3.2 远程解析
+
+解析器会在`词法分析`阶段解析字符串，词法分析阶段会对源文件中的字符串进行切片和分组，将原有无意义的字符流转换成 Token 序列。我们可以使用两种字面量方式在 Go 语言中声明字符串，即<font color=red>双引号和反引号</font>:
+
+```go
+str1 := "this is a string"
+str2 := `this is another
+string`
+```
+
+**使用双引号声明的字符串和其他语言中的字符串没有太多的区别，它只能用于单行字符串的初始化**，如果字符串内部出现双引号，需要使用 \ 符号避免编译器的解析错误，  
+**而反引号声明的字符串可以摆脱单行的限制**。
+> 当使用反引号时，因为双引号不再负责标记字符串的开始和结束，我们可以在字符串内部直接使用 "，在遇到需要手写 JSON 或者其他复杂数据格式的场景下非常方便。
+
+```go
+json := `{"author": "draven", "tags": ["golang"]}`
+```
+
+两种不同的声明方式其实也意味着 Go 语言编译器需要能够区分并且正确解析两种不同的字符串格式。解析字符串使用的扫描器 `cmd/compile/internal/syntax.scanner` 会将输入的字符串转换成 Token 流，`cmd/compile/internal/syntax.scanner.stdString` 方法是它用来解析使用双引号的标准字符串：
+
+```go
+func (s *scanner) stdString() {
+	s.startLit()
+	for {
+		r := s.getr()
+		if r == '"' {
+			break
+		}
+		if r == '\\' {
+			s.escape('"')
+			continue
+		}
+		if r == '\n' {
+			s.ungetr()
+			s.error("newline in string")
+			break
+		}
+		if r < 0 {
+			s.errh(s.line, s.col, "string not terminated")
+			break
+		}
+	}
+	s.nlsemi = true
+	s.lit = string(s.stopLit())
+	s.kind = StringLit
+	s.tok = _Literal
+}
+```
+
+从这个方法的实现我们能分析出 Go 语言处理标准字符串的逻辑：
+
+1. 标准字符串使用双引号表示开头和结尾；
+2. 标准字符串需要使用反斜杠 \ 来逃逸双引号；
+3. 标准字符串不能出现如下所示的隐式换行 \n；
+
+```go
+str := "start
+end"
+```
+
+使用反引号声明的原始字符串的解析规则就非常简单了，`cmd/compile/internal/syntax.scanner.rawString` 会将非反引号的所有字符都划分到当前字符串的范围中，所以我们可以使用它支持复杂的多行字符串：
+
+```go
+func (s *scanner) rawString() {
+	s.startLit()
+	for {
+		r := s.getr()
+		if r == '`' {
+			break
+		}
+		if r < 0 {
+			s.errh(s.line, s.col, "string not terminated")
+			break
+		}
+	}
+	s.nlsemi = true
+	s.lit = string(s.stopLit())
+	s.kind = StringLit
+	s.tok = _Literal
+}
+```
+
+无论是标准字符串还是原始字符串都会被标记成 `StringLit` 并传递到语法分析阶段。在语法分析阶段，与字符串相关的表达式都会由 `cmd/compile/internal/gc.noder.basicLit` 方法处理：
+
+```go
+func (p *noder) basicLit(lit *syntax.BasicLit) Val {
+	switch s := lit.Value; lit.Kind {
+	case syntax.StringLit:
+		if len(s) > 0 && s[0] == '`' {
+			s = strings.Replace(s, "\r", "", -1)
+		}
+		u, _ := strconv.Unquote(s)
+		return Val{U: u}
+	}
+}
+```
+
+无论是 import 语句中包的路径、结构体中的字段标签还是表达式中的字符串都会使用这个方法将原生字符串中最后的换行符删除并对字符串 Token 进行 Unquote，也就是去掉字符串两边的引号等无关干扰，还原其本来的面目。
+
+### 3.4.3 拼接
+
+Go 语言拼接字符串会使用 `+` 符号，编译器会将该符号对应的 `OADD` 节点转换成 `OADDSTR` 类型的节点，随后在 `cmd/compile/internal/gc.walkexpr` 中调用 `cmd/compile/internal/gc.addstr` 函数生成用于拼接字符串的代码：
+
+```go
+func walkexpr(n *Node, init *Nodes) *Node {
+	switch n.Op {
+	...
+	case OADDSTR:
+		n = addstr(n, init)
+	}
+}
+```
+
+`cmd/compile/internal/gc.addstr` 能帮助我们在编译期间选择合适的函数对字符串进行拼接，该函数会根据带拼接的字符串数量选择不同的逻辑：
+
+- 如果小于或者等于 5 个，那么会调用 `concatstring{2,3,4,5}` 等一系列函数；
+- 如果超过 5 个，那么会选择 `runtime.concatstrings` 传入一个数组切片；
+
+```go
+func addstr(n *Node, init *Nodes) *Node {
+	c := n.List.Len()
+
+	buf := nodnil()
+	args := []*Node{buf}
+	for _, n2 := range n.List.Slice() {
+		args = append(args, conv(n2, types.Types[TSTRING]))
+	}
+
+	var fn string
+	if c <= 5 {
+		fn = fmt.Sprintf("concatstring%d", c)
+	} else {
+		fn = "concatstrings"
+
+		t := types.NewSlice(types.Types[TSTRING])
+		slice := nod(OCOMPLIT, nil, typenod(t))
+		slice.List.Set(args[1:])
+		args = []*Node{buf, slice}
+	}
+
+	cat := syslook(fn)
+	r := nod(OCALL, cat, nil)
+	r.List.Set(args)
+	...
+
+	return r
+}
+```
+
+其实无论使用 `concatstring{2,3,4,5}` 中的哪一个，最终都会调用 `runtime.concatstrings`，它会先对遍历传入的切片参数，再过滤空字符串并计算拼接后字符串的长度。
+
+```go
+func concatstrings(buf *tmpBuf, a []string) string {
+	idx := 0
+	l := 0
+	count := 0
+	for i, x := range a {
+		n := len(x)
+		if n == 0 {
+			continue
+		}
+		l += n
+		count++
+		idx = i
+	}
+	if count == 0 {
+		return ""
+	}
+	if count == 1 && (buf != nil || !stringDataOnStack(a[idx])) {
+		return a[idx]
+	}
+	s, b := rawstringtmp(buf, l)
+	for _, x := range a {
+		copy(b, x)
+		b = b[len(x):]
+	}
+	return s
+}
+```
+
+如果非空字符串的数量为 1 并且当前的字符串不在栈上，就可以直接返回该字符串，不需要做出额外操作。
+
+![image](https://mail.wangkekai.cn/1617026595602.jpg)
+
+在正常情况下，运行时会调用 `copy` 将输入的多个字符串拷贝到目标字符串所在的内存空间。新的字符串是一片新的内存空间，与原来的字符串也没有任何关联，一旦需要拼接的字符串非常大，拷贝带来的性能损失是无法忽略的。
+
+### 3.4.4 类型转换
+
+当我们使用 Go 语言解析和序列化 JSON 等数据格式时，经常需要将数据在 `string` 和 `[]byte` 之间来回转换，类型转换的开销并没有想象的那么小，我们经常会看到 `runtime.slicebytetostring` 等函数出现在火焰图中，成为程序的性能热点。
+
+从字节数组到字符串的转换需要使用 `runtime.slicebytetostring` 函数，例如：`string(bytes)`，该函数在函数体中会先处理两种比较常见的情况，也就是长度为 0 或者 1 的字节数组，这两个情况处理起来都非常简单：
+
+```go
+func slicebytetostring(buf *tmpBuf, b []byte) (str string) {
+	l := len(b)
+	if l == 0 {
+		return ""
+	}
+	if l == 1 {
+		stringStructOf(&str).str = unsafe.Pointer(&staticbytes[b[0]])
+		stringStructOf(&str).len = 1
+		return
+	}
+	var p unsafe.Pointer
+	if buf != nil && len(b) <= len(buf) {
+		p = unsafe.Pointer(buf)
+	} else {
+		p = mallocgc(uintptr(len(b)), nil, false)
+	}
+	stringStructOf(&str).str = p
+	stringStructOf(&str).len = len(b)
+	memmove(p, (*(*slice)(unsafe.Pointer(&b))).array, uintptr(len(b)))
+	return
+}
+```
+
+处理过后会根据传入的缓冲区大小决定是否需要为新字符串分配一片内存空间，`runtime.stringStructOf` 会将传入的字符串指针转换成 runtime.stringStruct 结构体指针，然后设置结构体持有的字符串指针 str 和长度 len，最后通过 `runtime.memmove` 将原 `[]byte` 中的字节全部复制到新的内存空间中。
+
+当我们想要将字符串转换成 `[]byte` 类型时，需要使用 `runtime.stringtoslicebyte` 函数，该函数的实现非常容易理解：
+
+```go
+func stringtoslicebyte(buf *tmpBuf, s string) []byte {
+	var b []byte
+	if buf != nil && len(s) <= len(buf) {
+		*buf = tmpBuf{}
+		b = buf[:len(s)]
+	} else {
+		b = rawbyteslice(len(s))
+	}
+	copy(b, s)
+	return b
+}
+```
+
+上述函数会根据是否传入缓冲区做出不同的处理：
+
+- 当传入缓冲区时，它会使用传入的缓冲区存储 []byte；
+- 当没有传入缓冲区时，运行时会调用 runtime.rawbyteslice 创建新的字节切片并将字符串中的内容拷贝过去；
+
+![image](https://mail.wangkekai.cn/1617026877997.jpg)
+
+字符串和 `[]byte` 中的内容虽然一样，但是字符串的内容是只读的，我们不能通过下标或者其他形式改变其中的数据，而 `[]byte` 中的内容是可以读写的。不过无论从哪种类型转换到另一种都需要拷贝数据，而内存拷贝的性能损耗会随着字符串和 `[]byte` 长度的增长而增长。
+
+
 
 ## 5.0 常用关键字
 
