@@ -1517,7 +1517,6 @@ search:
 
 哈希表的每个桶都只能存储 8 个键值对，一旦当前哈希的某个桶超出 8 个，新的键值对就会存储到哈希的溢出桶中。随着键值对数量的增加，溢出桶的数量和哈希的装载因子也会逐渐升高，超过一定范围就会触发扩容，扩容会将桶的数量翻倍，元素再分配的过程也是在调用写操作时增量进行的，不会造成性能的瞬时巨大抖动。
 
-
 ## 3.4 字符串
 
 虽然字符串往往被看做一个整体，但是它实际上是一片连续的内存空间，我们也可以将它理解成一个由字符组成的数组。
@@ -1542,8 +1541,8 @@ search:
 
 ```go
 type StringHeader struct {
-	Data uintptr
-	Len  int
+    Data uintptr
+    Len  int
 }
 ```
 
@@ -1551,9 +1550,9 @@ type StringHeader struct {
 
 ```go
 type SliceHeader struct {
-	Data uintptr
-	Len  int
-	Cap  int
+    Data uintptr
+    Len  int
+    Cap  int
 }
 ```
 
@@ -1581,30 +1580,30 @@ json := `{"author": "draven", "tags": ["golang"]}`
 
 ```go
 func (s *scanner) stdString() {
-	s.startLit()
-	for {
-		r := s.getr()
-		if r == '"' {
-			break
-		}
-		if r == '\\' {
-			s.escape('"')
-			continue
-		}
-		if r == '\n' {
-			s.ungetr()
-			s.error("newline in string")
-			break
-		}
-		if r < 0 {
-			s.errh(s.line, s.col, "string not terminated")
-			break
-		}
-	}
-	s.nlsemi = true
-	s.lit = string(s.stopLit())
-	s.kind = StringLit
-	s.tok = _Literal
+    s.startLit()
+    for {
+        r := s.getr()
+        if r == '"' {
+            break
+        }
+        if r == '\\' {
+            s.escape('"')
+            continue
+        }
+        if r == '\n' {
+            s.ungetr()
+            s.error("newline in string")
+            break
+        }
+        if r < 0 {
+            s.errh(s.line, s.col, "string not terminated")
+            break
+        }
+    }
+    s.nlsemi = true
+    s.lit = string(s.stopLit())
+    s.kind = StringLit
+    s.tok = _Literal
 }
 ```
 
@@ -1623,21 +1622,21 @@ end"
 
 ```go
 func (s *scanner) rawString() {
-	s.startLit()
-	for {
-		r := s.getr()
-		if r == '`' {
-			break
-		}
-		if r < 0 {
-			s.errh(s.line, s.col, "string not terminated")
-			break
-		}
-	}
-	s.nlsemi = true
-	s.lit = string(s.stopLit())
-	s.kind = StringLit
-	s.tok = _Literal
+    s.startLit()
+    for {
+        r := s.getr()
+        if r == '`' {
+            break
+        }
+        if r < 0 {
+            s.errh(s.line, s.col, "string not terminated")
+            break
+        }
+    }
+    s.nlsemi = true
+    s.lit = string(s.stopLit())
+    s.kind = StringLit
+    s.tok = _Literal
 }
 ```
 
@@ -1645,14 +1644,14 @@ func (s *scanner) rawString() {
 
 ```go
 func (p *noder) basicLit(lit *syntax.BasicLit) Val {
-	switch s := lit.Value; lit.Kind {
-	case syntax.StringLit:
-		if len(s) > 0 && s[0] == '`' {
-			s = strings.Replace(s, "\r", "", -1)
-		}
-		u, _ := strconv.Unquote(s)
-		return Val{U: u}
-	}
+    switch s := lit.Value; lit.Kind {
+    case syntax.StringLit:
+        if len(s) > 0 && s[0] == '`' {
+            s = strings.Replace(s, "\r", "", -1)
+        }
+        u, _ := strconv.Unquote(s)
+        return Val{U: u}
+    }
 }
 ```
 
@@ -1664,11 +1663,11 @@ Go 语言拼接字符串会使用 `+` 符号，编译器会将该符号对应的
 
 ```go
 func walkexpr(n *Node, init *Nodes) *Node {
-	switch n.Op {
-	...
-	case OADDSTR:
-		n = addstr(n, init)
-	}
+    switch n.Op {
+    ...
+    case OADDSTR:
+        n = addstr(n, init)
+    }
 }
 ```
 
@@ -1679,32 +1678,32 @@ func walkexpr(n *Node, init *Nodes) *Node {
 
 ```go
 func addstr(n *Node, init *Nodes) *Node {
-	c := n.List.Len()
+    c := n.List.Len()
 
-	buf := nodnil()
-	args := []*Node{buf}
-	for _, n2 := range n.List.Slice() {
-		args = append(args, conv(n2, types.Types[TSTRING]))
-	}
+    buf := nodnil()
+    args := []*Node{buf}
+    for _, n2 := range n.List.Slice() {
+        args = append(args, conv(n2, types.Types[TSTRING]))
+    }
 
-	var fn string
-	if c <= 5 {
-		fn = fmt.Sprintf("concatstring%d", c)
-	} else {
-		fn = "concatstrings"
+    var fn string
+    if c <= 5 {
+        fn = fmt.Sprintf("concatstring%d", c)
+    } else {
+        fn = "concatstrings"
 
-		t := types.NewSlice(types.Types[TSTRING])
-		slice := nod(OCOMPLIT, nil, typenod(t))
-		slice.List.Set(args[1:])
-		args = []*Node{buf, slice}
-	}
+        t := types.NewSlice(types.Types[TSTRING])
+        slice := nod(OCOMPLIT, nil, typenod(t))
+        slice.List.Set(args[1:])
+        args = []*Node{buf, slice}
+    }
 
-	cat := syslook(fn)
-	r := nod(OCALL, cat, nil)
-	r.List.Set(args)
-	...
+    cat := syslook(fn)
+    r := nod(OCALL, cat, nil)
+    r.List.Set(args)
+    ...
 
-	return r
+    return r
 }
 ```
 
@@ -1712,30 +1711,30 @@ func addstr(n *Node, init *Nodes) *Node {
 
 ```go
 func concatstrings(buf *tmpBuf, a []string) string {
-	idx := 0
-	l := 0
-	count := 0
-	for i, x := range a {
-		n := len(x)
-		if n == 0 {
-			continue
-		}
-		l += n
-		count++
-		idx = i
-	}
-	if count == 0 {
-		return ""
-	}
-	if count == 1 && (buf != nil || !stringDataOnStack(a[idx])) {
-		return a[idx]
-	}
-	s, b := rawstringtmp(buf, l)
-	for _, x := range a {
-		copy(b, x)
-		b = b[len(x):]
-	}
-	return s
+    idx := 0
+    l := 0
+    count := 0
+    for i, x := range a {
+        n := len(x)
+        if n == 0 {
+            continue
+        }
+        l += n
+        count++
+        idx = i
+    }
+    if count == 0 {
+        return ""
+    }
+    if count == 1 && (buf != nil || !stringDataOnStack(a[idx])) {
+        return a[idx]
+    }
+    s, b := rawstringtmp(buf, l)
+    for _, x := range a {
+        copy(b, x)
+        b = b[len(x):]
+    }
+    return s
 }
 ```
 
@@ -1753,25 +1752,25 @@ func concatstrings(buf *tmpBuf, a []string) string {
 
 ```go
 func slicebytetostring(buf *tmpBuf, b []byte) (str string) {
-	l := len(b)
-	if l == 0 {
-		return ""
-	}
-	if l == 1 {
-		stringStructOf(&str).str = unsafe.Pointer(&staticbytes[b[0]])
-		stringStructOf(&str).len = 1
-		return
-	}
-	var p unsafe.Pointer
-	if buf != nil && len(b) <= len(buf) {
-		p = unsafe.Pointer(buf)
-	} else {
-		p = mallocgc(uintptr(len(b)), nil, false)
-	}
-	stringStructOf(&str).str = p
-	stringStructOf(&str).len = len(b)
-	memmove(p, (*(*slice)(unsafe.Pointer(&b))).array, uintptr(len(b)))
-	return
+    l := len(b)
+    if l == 0 {
+        return ""
+    }
+    if l == 1 {
+        stringStructOf(&str).str = unsafe.Pointer(&staticbytes[b[0]])
+        stringStructOf(&str).len = 1
+        return
+    }
+    var p unsafe.Pointer
+    if buf != nil && len(b) <= len(buf) {
+        p = unsafe.Pointer(buf)
+    } else {
+        p = mallocgc(uintptr(len(b)), nil, false)
+    }
+    stringStructOf(&str).str = p
+    stringStructOf(&str).len = len(b)
+    memmove(p, (*(*slice)(unsafe.Pointer(&b))).array, uintptr(len(b)))
+    return
 }
 ```
 
@@ -1781,15 +1780,15 @@ func slicebytetostring(buf *tmpBuf, b []byte) (str string) {
 
 ```go
 func stringtoslicebyte(buf *tmpBuf, s string) []byte {
-	var b []byte
-	if buf != nil && len(s) <= len(buf) {
-		*buf = tmpBuf{}
-		b = buf[:len(s)]
-	} else {
-		b = rawbyteslice(len(s))
-	}
-	copy(b, s)
-	return b
+    var b []byte
+    if buf != nil && len(s) <= len(buf) {
+        *buf = tmpBuf{}
+        b = buf[:len(s)]
+    } else {
+        b = rawbyteslice(len(s))
+    }
+    copy(b, s)
+    return b
 }
 ```
 
@@ -1801,8 +1800,6 @@ func stringtoslicebyte(buf *tmpBuf, s string) []byte {
 ![image](https://mail.wangkekai.cn/1617026877997.jpg)
 
 字符串和 `[]byte` 中的内容虽然一样，但是字符串的内容是只读的，我们不能通过下标或者其他形式改变其中的数据，而 `[]byte` 中的内容是可以读写的。不过无论从哪种类型转换到另一种都需要拷贝数据，而内存拷贝的性能损耗会随着字符串和 `[]byte` 长度的增长而增长。
-
-
 
 ## 5.0 常用关键字
 
