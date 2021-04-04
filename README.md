@@ -8,7 +8,7 @@ GoLang/PHP 面试整理
 ## 语言类
 
 - [PHP](https://github.com/kekaiwang/interview-go/blob/main/doc/php.md)
-- [GoLang](https://github.com/kekaiwang/interview-go/blob/main/doc/go.md)
+- [GoLang](https://github.com/kekaiwang/interview-go/blob/main/doc/go/go.md)
 
 ## 数据库
 
