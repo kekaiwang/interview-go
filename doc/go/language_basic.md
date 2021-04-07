@@ -1,3 +1,56 @@
 # 4.0 语言基础
 
 ## 4.1 函数调用
+
+## 4.3 反射
+
+### 4.3.1 三大法则
+
+#### 第三法则
+
+第三法则是与值是否可以被更改有关，如果我们想要修改一个 `reflect.Value` ，那么它持有的值一定是可以被更新的。
+
+```go
+func main() {
+    i := 1
+    v := reflect.ValueOf(i)
+    v.SetInt(10)
+    fmt.Println(i)
+}
+
+$ go run reflect.go
+panic: reflect: reflect.flag.mustBeAssignable using unaddressable value
+```
+
+<font color=red>由于 Go 语言的函数调用都是传值的，所以我们得到的反射对象跟最开始的变量没有任何关系</font>，那么直接修改反射对象无法改变原始变量，程序为了防止错误就会崩溃。
+
+想要修改原变量只能用如下方法修改：
+
+```go
+func main() {
+    i := 1
+    v := reflect.ValueOf(&i)
+    v.Elem().SetInt(10)
+    fmt.Println(i)
+}
+
+$ go run reflect.go
+10
+```
+
+1. 调用 `reflect.ValueOf` 获取变量指针；
+2. 调用 `reflect.Value.Elem` 获取指针指向的变量；
+3. 调用 `reflect.Value.SetInt` 更新变量的值。
+
+由于 Go 语言的函数调用都是值传递的，所以我们只能只能用迂回的方式改变原变量：先获取指针对应的 `reflect.Value`，再通过 `reflect.Value.Elem` 方法得到可以被设置的变量，我们可以通过下面的代码理解这个过程：
+
+```go
+func main() {
+    i := 1
+    v := &i
+    *v = 10
+}
+```
+
+**如果不能直接操作 i 变量修改其持有的值，我们就只能获取 i 变量所在地址并使用 \*v 修改所在地址中存储的整数**。
+
