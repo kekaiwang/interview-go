@@ -33,3 +33,85 @@
 **而遇到这种同时遍历索引和元素的 range 循环时，Go 语言会额外创建一个新的 v2 变量存储切片中的元素，循环中使用的这个变量 v2 会在每一次迭代被重新赋值而覆盖，赋值时也会触发拷贝**。
 
 #### 哈希表
+
+## 5.3 defer
+
+### 5.3.1 现象
+
+- `defer` 关键字的调用时机以及多次调用 `defer` 时执行顺序是如何确定的；
+- `defer` 关键字使用传值的方式传递参数时会进行预计算，导致不符合预期的结果；
+
+#### 作用域
+
+```go
+func main() {
+    {
+        defer fmt.Println("defer runs")
+        fmt.Println("block ends")
+    }
+    
+    fmt.Println("main ends")
+}
+
+$ go run main.go
+block ends
+main ends
+defer runs
+```
+
+**`defer` 传入的函数不是在退出代码块的作用域时执行的，它只会在当前函数和方法返回之前被调用**。
+
+#### 预计算参数
+
+> Go 语言中所有的函数调用都是传值的，虽然 defer 是关键字，但是也继承了这个特性。
+
+假设我们想计算 main 函数的运行时间
+
+```go
+func main() {
+	startedAt := time.Now()
+	defer fmt.Println(time.Since(startedAt))
+	
+	time.Sleep(time.Second)
+}
+
+$ go run main.go
+0s
+```
+
+<u>我们会发现调用 `defer` 关键字会立刻拷贝函数中引用的外部参数，所以 time.Since(startedAt) 的结果不是在 main 函数退出之前计算的，而是在 defer 关键字调用时计算的，最终导致上述代码输出 0s</u>。
+
+要想解决这个问题，我们需要向 defer 传入匿名函数：
+
+```go
+func main() {
+	startedAt := time.Now()
+	defer func() { fmt.Println(time.Since(startedAt)) }()
+	
+	time.Sleep(time.Second)
+}
+
+$ go run main.go
+1s
+```
+
+**虽然调用 defer 关键字时也使用值传递，但是因为拷贝的是函数指针**，所以 time.Since(startedAt) 会在 main 函数返回前调用并打印出符合预期的结果。
+
+### 5.3.2 数据结构
+
+```go
+type _defer struct {
+	siz       int32
+	started   bool
+	openDefer bool
+	sp        uintptr
+	pc        uintptr
+	fn        *funcval
+	_panic    *_panic
+	link      *_defer
+}
+```
+
+`runtime._defer` 结构体是延迟调用链表上的一个元素，所有的结构体都会通过 `link` 字段串联成链表。
+
+
