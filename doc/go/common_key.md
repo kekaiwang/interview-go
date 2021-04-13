@@ -14,7 +14,6 @@
 
 ### 5.1.2 经典循环
 
-
 ### 5.1.3 范围循环
 
 与简单的经典循环相比，范围循环在 Go 语言中更常见、实现也更复杂。这种循环同时使用 for 和 range 两个关键字，**编译器会在编译期间将所有 for-range 循环变成经典循环**。
@@ -67,12 +66,13 @@ defer runs
 
 假设我们想计算 main 函数的运行时间
 
-```go
+```golang
 func main() {
-	startedAt := time.Now()
-	defer fmt.Println(time.Since(startedAt))
-	
-	time.Sleep(time.Second)
+    startedAt := time.Now()
+
+    defer fmt.Println(time.Since(startedAt))
+
+    time.Sleep(time.Second)
 }
 
 $ go run main.go
@@ -85,10 +85,10 @@ $ go run main.go
 
 ```go
 func main() {
-	startedAt := time.Now()
-	defer func() { fmt.Println(time.Since(startedAt)) }()
-	
-	time.Sleep(time.Second)
+    startedAt := time.Now()
+    defer func() { fmt.Println(time.Since(startedAt)) }()
+
+    time.Sleep(time.Second)
 }
 
 $ go run main.go
@@ -101,17 +101,55 @@ $ go run main.go
 
 ```go
 type _defer struct {
-	siz       int32
-	started   bool
-	openDefer bool
-	sp        uintptr
-	pc        uintptr
-	fn        *funcval
-	_panic    *_panic
-	link      *_defer
+    siz       int32
+    started   bool
+    openDefer bool
+    sp        uintptr
+    pc        uintptr
+    fn        *funcval
+    _panic    *_panic
+    link      *_defer
 }
 ```
 
 `runtime._defer` 结构体是延迟调用链表上的一个元素，所有的结构体都会通过 `link` 字段串联成链表。
 
+## 5.4 panic 和 recover
 
+- `panic` 能够改变程序的控制流，调用 `panic` 后会立刻停止执行当前函数的剩余代码，并在当前 `Goroutine` 中递归执行调用方的 `defer；`
+- `recover` 可以中止 `panic` 造成的程序崩溃。它是一个只能在 `defer` 中发挥作用的函数，在其他作用域中调用不会发挥作用。
+
+### 5.4.1 现象
+
+- panic 只会触发当前 Goroutine 的 defer；
+- recover 只有在 defer 中调用才会生效；
+- panic 允许在 defer 中嵌套多次调用。
+
+#### 跨协程失效
+
+```go
+func main() {
+    defer println("in main")
+    go func() {
+        defer println("in goroutine")
+        panic("")
+    }()
+
+    time.Sleep(1 * time.Second)
+}
+
+$ go run main.go
+in goroutine
+panic:
+...
+```
+
+运行这段代码时发现 main 函数的 defer 并没有执行，执行的只是当前 goroutine 中的 defer 。
+
+前面我们曾经介绍过 `defer` 关键字对应的 `runtime.deferproc` 会将延迟调用函数与调用方所在 `Goroutine` 进行关联。所以当程序发生崩溃时只会调用当前 `Goroutine` 的延迟调用函数也是非常合理的。
+
+![image](https://mail.wangkekai.cn/B5A47EC2-1508-4930-B114-09C4AEF9F213.png)
+
+如上图所示，多个 Goroutine 之间没有太多的关联，一个 Goroutine 在 panic 时也不应该执行其他 Goroutine 的延迟函数。
+
+#### 失效的崩溃恢复
