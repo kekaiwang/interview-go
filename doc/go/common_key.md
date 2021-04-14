@@ -153,3 +153,52 @@ panic:
 如上图所示，多个 Goroutine 之间没有太多的关联，一个 Goroutine 在 panic 时也不应该执行其他 Goroutine 的延迟函数。
 
 #### 失效的崩溃恢复
+
+```go
+func main() {
+    defer fmt.Println("in main")
+    if err := recover(); err != nil {
+        fmt.Println(err)
+    }
+
+    panic("unknown err")
+}
+
+$ go run main.go
+in main
+panic: unknown err
+
+goroutine 1 [running]:
+main.main()
+    ...
+exit status 2
+```
+
+`recover` 只有在发生 `panic` 之后调用才会生效。然而在上面的控制流中，`recover` 是在 `panic` 之前调用的，并不满足生效的条件，<font color=red>所以我们需要在 `defer` 中使用 `recover` 关键字</font>。
+
+#### 嵌套崩溃
+
+```go
+func main() {
+    defer fmt.Println("in main")
+    defer func() {
+        defer func() {
+            panic("panic again and again")
+        }()
+        panic("panic again")
+    }()
+
+    panic("panic once")
+}
+
+$ go run main.go
+in main
+panic: panic once
+    panic: panic again
+    panic: panic again and again
+
+goroutine 1 [running]:
+...
+exit status 2
+```
+
