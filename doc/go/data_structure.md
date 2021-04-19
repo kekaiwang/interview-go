@@ -159,13 +159,13 @@ func anylit(n *Node, var_ *Node, init *Nodes) {
 假设代码需要初始化 [5]int{1, 2, 3, 4, 5}，那么我们可以将上述过程理解成以下的伪代码：
 
 ```go
-var arr [5]int
-statictmp_0[0] = 1
-statictmp_0[1] = 2
-statictmp_0[2] = 3
-statictmp_0[3] = 4
-statictmp_0[4] = 5
-arr = statictmp_0
+    var arr [5]int
+    statictmp_0[0] = 1
+    statictmp_0[1] = 2
+    statictmp_0[2] = 3
+    statictmp_0[3] = 4
+    statictmp_0[4] = 5
+    arr = statictmp_0
 ```
 
 总结起来，<font color=red>在不考虑逃逸分析的情况下，如果数组中元素的个数小于或者等于 4 个，那么所有的变量会直接在栈上初始化，</font>如果数组元素大于 4 个，变量就会在静态存储区初始化然后拷贝到栈上，这些转换后的代码才会继续进入中间代码生成和机器码生成两个阶段，最后生成可以执行的二进制文件。
