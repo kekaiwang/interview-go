@@ -39,17 +39,18 @@ func testFunc() []func() {
 	return funs
 }
 
-type student struct {
-	Name string
+type Student struct {
 	Age  int
+	Name string
 }
 
+var list map[string]Student
+
 func main() {
-	for i := 0; i < 10; i++ {
-		go func() {
-			fmt.Println(i)
-		}()
-	}
+	list = make(map[string]Student)
+
+	student := Student{"Aceld", 1}
+	fmt.Println(student)
 
 	// m := make(map[string]*student)
 	// stus := []student{

@@ -321,6 +321,14 @@ func main() {
 
 ## channel
 
+- 给一个 `nil channel` 发送数据，造成永远阻塞
+- 从一个 `nil channel` 接收数据，造成永远阻塞
+- 给一个已经关闭的 `channel` 发送数据，引起 `panic`
+- 从一个已经关闭的 `channel` 接收数据，如果缓冲区中为空，则返回一个零值
+- 无缓冲的 `channel` 是同步的，而有缓冲的 `channel` 是非同步的
+
+> 空读写阻塞，写关闭异常，读关闭空零
+
 ### 组合继承
 
 - 这是 `Golang` 的组合模式，可以实现 `OOP` 的继承。 被组合的类型 `People` 所包含的方法虽然升级成了外部类型 `Teacher` 这个组合类型的方法（一定要是匿名字段），但它们的方法 `(ShowA())` 调用时接受者并没有发生变化。 此时 `People` 类型并不知道自己会被什么类型组合，当然也就无法调用方法时去使用未知的组合者 `Teacher` 类型的功能。
@@ -406,3 +414,96 @@ func main() {
 ## nil
 
 - `nil` 可以用作 `interface、function、pointer、map、slice` 和 `channel` 的“空值”。但是如果不特别指定的话，Go 语言不能识别类型，所以会报错。报: `cannot use nil as type string in return argument.`
+
+## interface
+
+### 在golang中对多态的特点体现从语法上并不是很明显，我们知道发生多态的几个要素
+
+1. 有interface接口，并且有接口定义的方法。
+2. 有子类去重写interface的接口。
+3. 有父类指针指向子类的具体对象
+
+### interface在使用的过程中，共有两种表现形式
+
+- 一种为空接口(empty interface)
+
+```go
+var MyInterface interface{}
+```
+
+- 另一种为非空接口(non-empty interface)
+
+```go
+type MyInterface interface {
+    function()
+}
+```
+
+这两种 `interface` 类型分别用两种 `struct` 表示，空接口为 `eface`, 非空接口为 `iface`.
+
+![image](https://mail.wangkekai.cn/96FDF748-A53A-4E19-B31C-17F8CE80BB54.png)
+
+#### 空接口eface
+
+空接口eface结构，由两个属性构成，一个是类型信息 `_type`，一个是数据信息。其数据结构声明如下：
+
+```go
+type eface struct {      //空接口
+    _type *_type         //类型信息
+    data  unsafe.Pointer //指向数据的指针(go语言中特殊的指针类型unsafe.Pointer类似于c语言中的void*)
+}
+```
+
+`_type` 属性：是 GO 语言中所有类型的公共描述，Go 语言几乎所有的数据结构都可以抽象成 `_type`，是所有类型的公共描述，**type负责决定data应该如何解释和操作，** type 的结构代码如下:
+
+```go
+type _type struct {
+    size       uintptr  //类型大小
+    ptrdata    uintptr  //前缀持有所有指针的内存大小
+    hash       uint32   //数据hash值
+    tflag      tflag
+    align      uint8    //对齐
+    fieldalign uint8    //嵌入结构体时的对齐
+    kind       uint8    //kind 有些枚举值kind等于0是无效的
+    alg        *typeAlg //函数指针数组，类型实现的所有方法
+    gcdata    *byte
+    str       nameOff
+    ptrToThis typeOff
+}
+```
+
+`data` 属性: 表示指向具体的实例数据的指针，他是一个 `unsafe.Pointer` 类型，相当于一个 C 的万能指针 `void*`。
+
+![image](https://mail.wangkekai.cn/356FF9BD-E988-4E8F-9DBF-D23FC3467DA9.png)
+
+#### 非空接口iface
+
+`iface` 表示 `non-empty interface` 的数据结构，非空接口初始化的过程就是初始化一个 `iface` 类型的结构，其中 `data` 的作用同 `eface` 的相同。
+
+```go
+type iface struct {
+    tab  *itab
+    data unsafe.Pointer
+}
+```
+
+`iface` 结构中最重要的是 `itab` 结构（结构如下），每一个 `itab` 都占 32 字节的空间。`itab` 可以理解为 `pair<interface type, concrete type>` 。`itab` 里面包含了 `interface` 的一些关键信息，比如 `method` 的具体实现。
+
+```go
+type itab struct {
+    inter  *interfacetype   // 接口自身的元信息
+    _type  *_type           // 具体类型的元信息
+    link   *itab
+    bad    int32
+    hash   int32            // _type里也有一个同样的hash，此处多放一个是为了方便运行接口断言
+    fun    [1]uintptr       // 函数指针，指向具体类型所实现的方法
+}
+```
+
+1. `interface type` 包含了一些关于 `interface` 本身的信息，比如 `package path`，包含的 `method` 。这里的 `interface type` 是定义 `interface` 的一种抽象表示。
+2. `type` 表示具体化的类型，与 `eface` 的 `type` 类型相同。
+3. `hash` 字段其实是对 `_type.hash` 的拷贝，它会在 `interface` 的实例化时，用于快速判断目标类型和接口中的类型是否一致。另，Go 的 `interface` 的 `Duck-typing` 机制也是依赖这个字段来实现。
+4. `fun` 字段其实是一个动态大小的数组，虽然声明时是固定大小为 1，但在使用时会直接通过 fun 指针获取其中的数据，并且不会检查数组的边界，所以该数组中保存的元素数量是不确定的。
+
+![image](https://mail.wangkekai.cn/BB52371E-F4B4-4C88-B1E7-C7E7151E4346.png)
+
