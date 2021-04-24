@@ -47,10 +47,17 @@ type Student struct {
 var list map[string]Student
 
 func main() {
-	list = make(map[string]Student)
+	var str = "thequickbrownfoxjumpsoverthelazydog"
 
-	student := Student{"Aceld", 1}
-	fmt.Println(student)
+	for _, v := range str {
+		fmt.Printf("%T", v)
+		break
+	}
+
+	// list = make(map[string]Student)
+
+	// student := Student{"Aceld", 1}
+	// fmt.Println(student)
 
 	// m := make(map[string]*student)
 	// stus := []student{
