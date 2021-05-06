@@ -50,7 +50,7 @@ func main() {
     `MyInt1` 为称之为  `defintion`，虽然底层类型为 `int` 类型，但是不能直接赋值，需要强转；
   - 基于一个类型创建一个别名，称之为 `alias`。  
     `MyInt2` 称之为 `alias`，可以直接赋值。
-  - 结果不限于方法，字段也也一样；也不限于 `type alias`，`type defintion` 也是一样的，只要有重复的方法、字段，就会有这种提示，因为不知道该选择哪个。`ambiguous selector my.m1`
+  - 结果不限于方法，字段也一样；也不限于 `type alias`，`type defintion` 也是一样的，只要有重复的方法、字段，就会有这种提示，因为不知道该选择哪个。`ambiguous selector my.m1`
 
 ```go
 type T1 struct {

@@ -1,6 +1,8 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+)
 
 func strStr(haystack string, needle string) int {
 	m, n := len(haystack), len(needle)
@@ -46,13 +48,57 @@ type Student struct {
 
 var list map[string]Student
 
-func main() {
-	var str = "thequickbrownfoxjumpsoverthelazydog"
-
-	for _, v := range str {
-		fmt.Printf("%T", v)
-		break
+func add(a int, b int) int {
+	A := a ^ b
+	B := a & b
+	fmt.Println(A, B)
+	if B == 0 {
+		return A
+	} else {
+		B = B << 1
+		return add(A, B)
 	}
+}
+
+func sortArrayByParityII(nums []int) []int {
+	for i, j := 0, 0; i < len(nums); i += 2 {
+		if nums[i]%2 == 1 {
+			for j%2 == 1 {
+				j += 2
+			}
+
+			fmt.Println(i, j, nums[i])
+		}
+	}
+
+	return nums
+}
+
+func main() {
+
+	res := sortArrayByParityII([]int{4, 2, 5, 7, 6, 5, 8, 9})
+	fmt.Println(res)
+
+	// fmt.Println(2 & 4)
+
+	// add(4, 2)
+	// task_cnt := math.MaxInt64
+
+	// fmt.Println(task_cnt)
+
+	// for i := 0; i < task_cnt; i++ {
+	// 	go func(i int) {
+	// 		//... do some busi...
+
+	// 		fmt.Println("go func ", i, " goroutine count = ", runtime.NumGoroutine())
+	// 	}(i)
+	// }
+	// var str = "thequickbrownfoxjumpsoverthelazydog"
+
+	// for _, v := range str {
+	// 	fmt.Printf("%T", v)
+	// 	break
+	// }
 
 	// list = make(map[string]Student)
 
