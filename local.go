@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -189,15 +190,101 @@ func selectionSort(arr []int) {
 	return
 }
 
+func inserSort(nums []int) {
+	len := len(nums)
+
+	if len <= 1 {
+		return
+	}
+
+	for i := 1; i < len; i++ {
+		value := nums[i]
+
+		j := i - 1
+
+		for ; j >= 0; j-- {
+			if nums[j] > value {
+				nums[j+1] = nums[j]
+			} else {
+				break
+			}
+		}
+
+		nums[j+1] = value
+	}
+
+	return
+}
+
+type User struct {
+	Info *Info
+}
+
+type Info struct {
+	Name string `json:"name"`
+}
+
+func GetInfo(wg *sync.WaitGroup, res chan *Info) {
+	defer wg.Done()
+
+	res <- &Info{
+		Name: "test",
+	}
+
+	return
+}
+
 func main() {
 
-	arr := []int{4, 5, 3, 7, 8, 2, 1, 6}
+	var res = make(chan *Info, 1)
+	var user User
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go GetInfo(&wg, res)
+
+	wg.Wait()
+
+	i := <-res
+	user.Info = i
+
+	fmt.Println(user.Info)
+
+	// id := ""
+
+	// fmt.Println(id[:3])
+
+	// s := make([]int, 10, 5)
+
+	// s[0] = 1
+
+	// fmt.Println(s)
+
+	// arr := [6]int{1, 2, 3, 4, 5, 6}
+	// s := arr[1:4]
+
+	// fmt.Println(arr, s)
+
+	// s[1] = 5
+
+	// fmt.Println(arr, s)
+
+	// i := 10
+
+	// fmt.Println(i & 2)
+
+	// arr := []int{4, 5, 3, 7, 8, 2, 1, 6}
+
+	// inserSort(arr)
+
+	// fmt.Println(arr)
 
 	// bubbleSort(arr)
 	// insertSort(arr)
 
-	selectionSort(arr)
-	fmt.Println(arr)
+	// selectionSort(arr)
+	// fmt.Println(arr)
 
 	// res := selectPrime()
 

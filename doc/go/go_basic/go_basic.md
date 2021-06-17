@@ -507,3 +507,31 @@ type itab struct {
 
 ![image](https://mail.wangkekai.cn/BB52371E-F4B4-4C88-B1E7-C7E7151E4346.png)
 
+## sizeof
+
+```golang
+slice := []int{1,2,3}
+fmt.Println(unsafe.Sizeof(slice)) //24
+```
+
+- 如果 x 为一个切片，`sizeof` 返回的大小是切片的描述符，而不是切片所指向的内存的大小。
+
+这里如果换成一个数组呢？而不是一个切片
+
+```golang
+arr := [...]int{1,2,3,4,5}
+fmt.Println(unsafe.Sizeof(arr)) //40
+arr2 := [...]int{1,2,3,4,5,6}
+fmt.Println(unsafe.Sizeof(arr)) //48
+```
+
+- sizeof总是在编译期就进行求值，而不是在运行时，这意味着，sizeof的返回值可以赋值给常量
+
+再来看一个字符串的例子
+
+```go
+str := "hello"
+fmt.Println(unsafe.Sizeof(str)) //16
+```
+
+- 不论字符串的len有多大，sizeof 始终返回16。 实际上字符串类型对应一个结构体，该结构体有两个域，**第一个域是指向该字符串的指针，第二个域是字符串的长度，每个域占8个字节，但是并不包含指针指向的字符串的内容，这也就是为什么sizeof始终返回的是16**
