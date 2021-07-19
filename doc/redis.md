@@ -567,7 +567,7 @@ OK
 
 为了使用  Redlock，需要提供多个  Redis 实例，这些实例之前相互独立没有主从关系。同很多分布式算法一样， redlock 也使用 「大多数机制」。
 
-==加锁时==，它会向过半节点发送  set(key, value, nx=True, ex=xxx) 指令，<font color=red>只要过半节点 set 成功，那就认为加锁成功。</font>释放锁时，需要向所有节点发送 del 指令。不过 Redlock 算法还需要考虑出错重试、时钟漂移等很多细节问题，同时因为 Redlock 需要向多个节点进行读写，意味着相比单实例 Redis 性能会下降一些。
++加锁时+，它会向过半节点发送  set(key, value, nx=True, ex=xxx) 指令，<font color=red>只要过半节点 set 成功，那就认为加锁成功。</font>释放锁时，需要向所有节点发送 del 指令。不过 Redlock 算法还需要考虑出错重试、时钟漂移等很多细节问题，同时因为 Redlock 需要向多个节点进行读写，意味着相比单实例 Redis 性能会下降一些。
 
 ### Redlock 使用场景
 
