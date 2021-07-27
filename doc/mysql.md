@@ -324,16 +324,30 @@ ALTER TABLE tbl_name WAIT N add column ...
 - 第一种启动方式，一致性视图是在执行第一个快照读语句时创建的；
 - 第二种启动方式，一致性视图是在执行 start transaction with consistent snapshot 时创建的。
 
-**在 MySQL 里，有==两个“视图”的概念==：**
+**在 MySQL 里，有两个“视图”的概念：**
 
-- 一个是 view。它是一个用查询语句定义的虚拟表，在调用的时候执行查询语句并生成结果。创建视图的语法是 create view … ，而它的查询方法与表一样。
+- 一个是 view。它是一个用查询语句定义的虚拟表，在调用的时候执行查询语句并生成结果。创建视图的语法是 `create view …` ，而它的查询方法与表一样。
 - 另一个是 InnoDB 在实现 MVCC 时用到的一致性读视图，即 consistent read view，用于支持 RC（Read Committed，读提交）和 RR（Repeatable Read，可重复读）隔离级别的实现。
 
-它没有物理结构，作用是事务执行期间用来定义“<font color="red">我能看到什么数据</font>”。
+它没有物理结构，作用是事务执行期间用来定义“**我能看到什么数据**”。
+
+![image](https://mail.wangkekai.cn/30FFAA92-652B-4B68-A8E4-C6F1EB13E6C1.png)
 
 ### “快照”在 MVCC 里是怎么工作的？
 
-在实现上， InnoDB 为每个事务构造了一个数组，用来保存这个事务启动瞬间，当前正在“活跃”的所有事务 ID。“活跃”指的就是，启动了但还没提交。
+InnoDB 里面每个事务有一个唯一的事务 ID，叫作 transaction id。它是在事务开始的时候向 InnoDB 的事务系统申请的，是按申请顺序严格递增的。
+
+在实现上， InnoDB 为每个事务构造了一个数组，用来保存这个事务启动瞬间，当前正在“活跃”的所有事务 ID。*“活跃”指的就是，启动了但还没提交*。
+
+![image](https://mail.wangkekai.cn/CA0CB5D9-8118-412B-8B99-EE3CA5457455.png)
+
+对于当前事务的启动瞬间来说，一个数据版本的 row trx_id，有以下几种可能：
+
+1. 如果落在绿色部分，表示这个版本是已提交的事务或者是当前事务自己生成的，这个数据是可见的；
+2. 如果落在红色部分，表示这个版本是由将来启动的事务生成的，是肯定不可见的；
+3. 如果落在黄色部分，那就包括两种情况
+   1. 若 row trx_id 在数组中，表示这个版本是由还没提交的事务生成的，不可见；
+   2. 若 row trx_id 不在数组中，表示这个版本是已经提交了的事务生成的，可见。
 
 **InnoDB 利用了“所有数据都有多个版本”的这个特性，实现了“秒级创建快照”的能力。**
 
@@ -345,7 +359,16 @@ ALTER TABLE tbl_name WAIT N add column ...
 
 #### 更新逻辑
 
-**<font color="red">更新数据都是先读后写的，而这个读，只能读当前的值，称为“当前读”（current read）</font>**
+下图中，事务 B 的视图数组是先生成的，之后事务 C 才提交，不是应该看不见 (1,2) 吗，怎么能算出 (1,3) 来？
+![image](https://mail.wangkekai.cn/AE69EEA0-843A-4FA3-86AC-CB295A0F0361.png)
+
+如果事务 B 在更新之前查询一次数据，这个查询返回的 k 的值确实是 1。
+
+但是，当它要去更新数据的时候，就不能再在历史版本上更新了，否则事务 C 的更新就丢失了。因此，事务 B 此时的 `set k=k+1` 是在（1,2）的基础上进行的操作。
+
+**更新数据都是先读后写的，而这个读，只能读当前的值，称为“当前读”（current read）**。
+
+除了 update 语句外，select 语句如果加锁，也是当前读
 
 如果把事务 A 的查询语句 select * from t where id=1 修改一下，加上 lock in share mode 或 for update，也都可以读到版本号是 101 的数据，返回的 k 的值是 3。下面这两个 select 语句，**就是分别加了读锁（S 锁，共享锁）和写锁（X 锁，排他锁）。**
 
@@ -353,6 +376,13 @@ ALTER TABLE tbl_name WAIT N add column ...
 mysql> select k from t where id=1 lock in share mode;
 mysql> select k from t where id=1 for update;
 ```
+
+假设事务 C 不是马上提交，变成下面这样呢？
+![image](https://mail.wangkekai.cn/A33782FE-C85B-44B4-BC85-3BE4EF5FCB6C.png)
+
+事务 C’的不同是，更新后并没有马上提交，在它提交前，事务 B 的更新语句先发起了。前面说过了，虽然事务 C’ 还没提交，但是 (1,2) 这个版本也已经生成了，并且是当前的最新版本。那么，事务 B 的更新语句会怎么处理呢？
+
+![image](https://mail.wangkekai.cn/7C6DF686-8BAE-4A36-899C-3E97FB249323.png)
 
 **事务的可重复读的能力是怎么实现的？**
 
@@ -362,6 +392,8 @@ mysql> select k from t where id=1 for update;
 
 - 在可重复读隔离级别下，只需要在事务开始的时候创建一致性视图，之后事务里的其他查询都共用这个一致性视图；
 - 在读提交隔离级别下，每一个语句执行前都会重新算出一个新的视图。
+
+> “start transaction with consistent snapshot; ”的意思是从这个语句开始，创建一个持续整个事务的一致性快照。所以，*在读提交隔离级别下，这个用法就没意义了，等效于普通的 start transaction*。
 
 ## 09 | 普通索引和唯一索引，应该怎么选择？
 
