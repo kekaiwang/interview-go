@@ -460,7 +460,7 @@ mysql> select k from t where id=1 for update;
 
 > 如果所有的更新后面，都马上伴随着对这个记录的查询，那么你应该关闭 change buffer。而在其他情况下，change buffer 都能提升更新性能。
 
-在实际使用中，你会发现，++普通索引和 change buffer 的配合使用，对于数据量大的表的更新优化还是很明显的。++
+在实际使用中，你会发现，*普通索引和 change buffer 的配合使用，对于数据量大的表的更新优化还是很明显的*。
 
 #### change buffer 和 redo log
 
@@ -490,7 +490,7 @@ mysql> insert into t(id,k) values(id1,k1),(id2,k2);
 1. 读 Page 1 的时候，直接从内存返回。WAL 之后如果读数据，是不是一定要读盘，是不是一定要从 redo log 里面把数据更新以后才可以返回？其实是不用的。你可以看一下图 3 的这个状态，虽然磁盘上还是之前的数据，但是这里直接从内存返回结果，结果是正确的。
 1. 要读 Page 2 的时候，需要把 Page 2 从磁盘读入内存中，然后应用 change buffer 里面的操作日志，生成一个正确的版本并返回结果。
 
-##### redo log 主要节省的是随机写磁盘的 IO 消耗（转成顺序写），而 change buffer 主要节省的则是随机读磁盘的 IO 消耗。
+**redo log 主要节省的是随机写磁盘的 IO 消耗（转成顺序写），而 change buffer 主要节省的则是随机读磁盘的 IO 消耗**。
 
 ## 10 | MySQL为什么有时候会选错索引？
 
