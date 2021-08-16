@@ -116,11 +116,8 @@ redo log 和 binglog 的三点不同：
 
 ### 小结
 
-redo log 用于保证 `crash-safe` `能力。innodb_flush_log_at_trx_commit` 这个参数设置成
-1 的时候，表示每次事务的 redo log 都直接持久化到磁盘。这个参数我建议你设置成 1，
-这样可以保证 MySQL 异常重启之后数据不丢失。
-
-`sync_binlog` 这个参数设置成 1 的时候，表示每次事务的 binlog 都持久化到磁盘。这个参
+1. redo log 用于保证 `crash-safe` `能力。innodb_flush_log_at_trx_commit` 这个参数设置成 1 的时候，表示每次事务的 redo log 都直接持久化到磁盘。这个参数我建议你设置成 1，这样可以保证 MySQL 异常重启之后数据不丢失。
+2. `sync_binlog` 这个参数设置成 1 的时候，表示每次事务的 binlog 都持久化到磁盘。这个参
 数我也建议你设置成 1，这样可以保证 MySQL 异常重启之后 binlog 不丢失。
 
 ## 03 | 事务隔离：为什么你改了我还看不见？
