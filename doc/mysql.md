@@ -419,7 +419,7 @@ mysql> select k from t where id=1 for update;
 **唯一索引的更新就不能使用 change buffer，实际上也只有普通索引可以使用**。
 > change buffer 的大小，可以通过参数 innodb_change_buffer_max_size 来动态设置。这个参数设置为 50 的时候，表示 change buffer 的大小最多只能占用 buffer pool 的 50%。
 
-#### 如果要在这张表中插入一个新记录 (4,400) 的话，InnoDB 的处理流程是怎样的
+**如果要在这张表中插入一个新记录 (4,400) 的话，InnoDB 的处理流程是怎样的**?
 
 1. 第一种情况是，**这个记录要更新的目标页在内存中**。这时，InnoDB 的处理流程如下：
 
