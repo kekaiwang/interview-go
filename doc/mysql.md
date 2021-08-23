@@ -488,7 +488,8 @@ mysql> insert into t(id,k) values(id1,k1),(id2,k2);
 ### 优化器的逻辑
 
 > **“区分度”**:一个索引上不同的值越多，这个索引的区分度就越好。  
-> **“基数”（cardinality）**:一个索引上不同的值的个数。也就是说，这个基数越大，索引的区分度越好。
+> **“基数”（cardinality）**:一个索引上不同的值的个数。也就是说，这个基数越大，索引的区分度越好。  
+使用 `count(distinct)` 查看有多少
 
 **MySQL 是怎样得到索引的基数的呢？ 采样统计方法**.
 
@@ -505,6 +506,8 @@ analyze table [NAME] 命令，可以用来重新统计索引信息。
 如果你发现 explain 的结果预估的 rows 值跟实际情况差距比较大，也就是索引统计不准确时，可以采用这个方法来处理。
 ```
 
+> explain 执行的时候，如果查询使用的是普通索引，都要再回到主键上查出整行数据，这个代价优化器也要计算在内。
+
 ### 索引选择异常和处理
 
 - **一种方法是，像我们第一个例子一样，采用 force index 强行选择一个索引。**
@@ -516,11 +519,27 @@ analyze table [NAME] 命令，可以用来重新统计索引信息。
 
 ## 11 | 怎么给字符串字段加索引？
 
+**使用非前缀索引进行查询的执行顺序：**
+
+1. 从索引树 index1 找到满足索引值的这条记录，取得字段的值；
+2. 到主键上查到主键值是 ID2 的行，判断字段的值是正确的，将这行记录加入结果集；
+3. 取 index1 索引树上刚刚查到的位置的下一条记录，发现已经不满足查询的条件了，循环结束。
+
+**使用前缀索引进行查询的执行顺序：**
+
+1. 从 index2 索引树找到满足索引值是’zhangs’的记录，找到的第一个是 ID1；
+2. 到主键上查到主键值是 ID1 的行，判断出 email 的值不是’zhangssxyz@xxx.com’，这行记录丢弃；
+3. 取 index2 上刚刚查到的位置的下一条记录，发现仍然是’zhangs’，取出 ID2，再到 ID 索引上取整行然后判断，这次值对了，将这行记录加入结果集；
+4. 重复上一步，直到在 index2 上取到的值不是’zhangs’时，循环结束。
+
+> 通过这个对比可以发现，使用前缀索引后，可能会导致查询语句读数据的次数变多。但是如果定义的字节多几个，可能就只需要扫描一行了。
+
 **使用前缀索引，定义好长度，就可以做到既节省空间，又不用额外增加太多的查询成本。**
 
 ### 前缀索引对覆盖索引的影响
 
-使用前缀索引就用不上覆盖索引对查询性能的优化了，这也是你在选择是否使用前缀索引时需要考虑的一个因素。
+使用前缀索引即使长度足够长， InnoDB 还是要回到主键索引再去查一下，因为系统并不确定前缀索引的定义是否截断了完整信息。  
+**使用前缀索引就用不上覆盖索引对查询性能的优化了**，这也是你在选择是否使用前缀索引时需要考虑的一个因素。
 
 ### 其他方式
 
@@ -530,7 +549,7 @@ analyze table [NAME] 命令，可以用来重新统计索引信息。
 mysql> select field_list from t where id_card = reverse('input_id_card_string');
 ```
 
-- **第二种方式是使用 hash 字段**。你可以在表上再创建一个整数字段，来保存身份证的校验码，同时在这个字段上创建索引。
+- **第二种方式是使用 hash 字段**。你可以在表上再创建一个整数字段，来保存身份证的校验码，同时在这个字段上创建索引。 每次插入时 crc32() 得到新字段。
 
 **使用倒序存储和使用 hash 字段这两种方法的异同点。**
 
@@ -539,15 +558,15 @@ mysql> select field_list from t where id_card = reverse('input_id_card_string');
 **它们的区别，主要体现在以下三个方面：**
 
 1. 从占用的额外空间来看，倒序存储方式在主键索引上，不会消耗额外的存储空间，而 hash 字段方法需要增加一个字段。当然，倒序存储方式使用 4 个字节的前缀长度应该是不够的，如果再长一点，这个消耗跟额外这个 hash 字段也差不多抵消了。
-1. 在 CPU 消耗方面，倒序方式每次写和读的时候，都需要额外调用一次 reverse 函数，而 hash 字段的方式需要额外调用一次 crc32() 函数。如果只从这两个函数的计算复杂度来看的话，reverse 函数额外消耗的 CPU 资源会更小些。
-1. 从查询效率上看，使用 hash 字段方式的查询性能相对更稳定一些。因为 crc32 算出来的值虽然有冲突的概率，但是概率非常小，可以认为每次查询的平均扫描行数接近 1。而倒序存储方式毕竟还是用的前缀索引的方式，也就是说还是会增加扫描行数。
+2. 在 CPU 消耗方面，倒序方式每次写和读的时候，都需要额外调用一次 reverse 函数，而 hash 字段的方式需要额外调用一次 crc32() 函数。如果只从这两个函数的计算复杂度来看的话，reverse 函数额外消耗的 CPU 资源会更小些。
+3. 从查询效率上看，使用 hash 字段方式的查询性能相对更稳定一些。因为 crc32 算出来的值虽然有冲突的概率，但是概率非常小，可以认为每次查询的平均扫描行数接近 1。而倒序存储方式毕竟还是用的前缀索引的方式，也就是说还是会增加扫描行数。
 
 我们来回顾一下，你可以使用的方式有：
 
 1. 直接创建完整索引，这样可能比较占用空间；
-1. 创建前缀索引，节省空间，但会增加查询扫描次数，并且不能使用覆盖索引；
-1. 倒序存储，再创建前缀索引，用于绕过字符串本身前缀的区分度不够的问题；
-1. 创建 hash 字段索引，查询性能稳定，有额外的存储和计算消耗，跟第三种方式一样，都不支持范围扫描。
+2. 创建前缀索引，节省空间，但会增加查询扫描次数，并且不能使用覆盖索引；
+3. 倒序存储，再创建前缀索引，用于绕过字符串本身前缀的区分度不够的问题；
+4. 创建 hash 字段索引，查询性能稳定，有额外的存储和计算消耗，跟第三种方式一样，都不支持范围扫描。
 
 ## 12 | 为什么我的MySQL会“抖”一下？
 
@@ -601,7 +620,7 @@ InnoDB 的策略是尽量使用内存，因此对于一个长时间运行的库�
 
 **InnoDB 的刷盘速度就是要参考这两个因素：一个是脏页比例，一个是 redo log 写盘速度。**
 
-参数 ==innodb_max_dirty_pages_pct== 是脏页比例上限，默认值是 75%。InnoDB 会根据当前的脏页比例（假设为 M），算出一个范围在 0 到 100 之间的数字，计算这个数字的伪代码类似这样：
+参数 `innodb_max_dirty_pages_pct` 是脏页比例上限，默认值是 75%。InnoDB 会根据当前的脏页比例（假设为 M），算出一个范围在 0 到 100 之间的数字，计算这个数字的伪代码类似这样：
 
 ```mysql
 F1(M)
@@ -616,7 +635,7 @@ InnoDB 每次写入的日志都有一个序号，当前写入的序号跟 checkp
 
 然后，根据上述算得的 F1(M) 和 F2(N) 两个值，取其中较大的值记为 R，之后引擎就可以按照 innodb_io_capacity 定义的能力乘以 R% 来控制刷脏页的速度。
 
-**你就要合理地设置 innodb_io_capacity 的值，并且平时要多关注脏页比例，不要让它经常接近 75%。**
+**你就要合理地设置 `innodb_io_capacity` 的值，并且平时要多关注脏页比例，不要让它经常接近 75%。**
 
 > 一旦一个查询请求需要在执行过程中先 flush 掉一个脏页时，这个查询就可能要比平时慢了。而 MySQL 中的一个机制，可能让你的查询会更慢：在准备刷一个脏页的时候，如果这个数据页旁边的数据页刚好是脏页，就会把这个“邻居”也带着一起刷掉；而且这个把“邻居”拖下水的逻辑还可以继续蔓延，也就是对于每个邻居数据页，如果跟它相邻的数据页也还是脏页的话，也会被放到一起刷。
 >
@@ -630,7 +649,7 @@ InnoDB 每次写入的日志都有一个序号，当前写入的序号跟 checkp
 
 ## 13 | 为什么表数据删掉一半，表文件大小不变？
 
-<font color="red">**一个 InnoDB 表包含两部分，即：表结构定义和数据。**</font>
+**一个 InnoDB 表包含两部分，即：表结构定义和数据。**
 > **在 MySQL 8.0 版本以前，表结构是存在以.frm为后缀的文件里。而MySQL8.0版本，则已经允许把表结构定义放在系统数据表中了。**
 因为表结构定义占用的空间很小，所以我们今天主要讨论的是表数据。
 
@@ -670,7 +689,7 @@ InnoDB 每次写入的日志都有一个序号，当前写入的序号跟 checkp
 
 你可以新建一个与表 A 结构相同的表 B，然后按照主键 ID 递增的顺序，把数据一行一行地从表 A 里读出来再插入到表 B 中。
 
-使用 <code>alter table A engine=InnoDB</code> 命令来重建表。在 MySQL 5.5 版本之前，这个命令的执行流程跟我们前面描述的差不多，区别只是这个临时表 B 不需要你自己创建，MySQL 会自动完成转存数据、交换表名、删除旧表的操作。
+使用 `alter table A engine=InnoDB` 命令来重建表。在 MySQL 5.5 版本之前，这个命令的执行流程跟我们前面描述的差不多，区别只是这个临时表 B 不需要你自己创建，MySQL 会自动完成转存数据、交换表名、删除旧表的操作。
 
 **在MySQL 5.6 版本开始引入的 Online DDL，对这个操作流程做了优化。**
 
@@ -712,7 +731,7 @@ alter table t engine=innodb,ALGORITHM=copy;
 - DDL 过程如果是 Online 的，就一定是 inplace 的；
 - 反过来未必，也就是说 inplace 的 DDL，有可能不是 Online 的。截止到 MySQL 8.0，添加全文索引（FULLTEXT index）和空间索引 (SPATIAL index) 就属于这种情况。
 
-1. 从 MySQL 5.6 版本开始，alter table t engine = InnoDB（也就是 recreate）默认的就是上面 Online DDL 流程了；
+1. 从 MySQL 5.6 版本开始，`alter table t engine = InnoDB`（也就是 recreate）默认的就是上面 Online DDL 流程了；
 1. analyze table t 其实不是重建表，只是对表的索引信息做重新统计，没有修改数据，这个过程中加了 MDL 读锁；
 1. optimize table t 等于 recreate+analyze。
 
@@ -895,8 +914,7 @@ MySQL 会给每个线程分配一块内存用于排序，称为 sort_buffer。
 
 <u>max_length_for_sort_data</u> 是 MySQL 中专门控制用于排序的行数据的长度的一个参数。它的意思是，如果单行的长度超过这个值，MySQL 就认为单行太大，要换一个算法。
 
-把 max_length_for_sort_data 设置为 16，我们再来看看计算过程有什么改变。
-新的算法放入 sort_buffer 的字段，只有要排序的列（即 name 字段）和主键 id。
+把 max_length_for_sort_data 设置为 16，我们再来看看计算过程有什么改变。新的算法放入 sort_buffer 的字段，只有要排序的列（即 name 字段）和主键 id。
 
 但这时，排序的结果就因为少了 city 和 age 字段的值，不能直接返回了，整个执行流程就变成如下所示的样子：
 
@@ -1130,7 +1148,7 @@ begin; <br> select id from t where c = 5 <br> lock in share mode;|  |
 
 正常的短连接模式就是连接到数据库后，执行很少的 SQL 语句就断开，下次需要的时候再重连。如果使用的是短连接，在业务高峰期的时候，就可能出现连接数突然暴涨的情况。
 
-#### 第一种方法：先处理掉那些占着连接但是不工作的线程。
+#### 第一种方法：先处理掉那些占着连接但是不工作的线程
 
 > max_connections 的计算，不是看谁在 running，是只要连着就占用一个计数位置。
 
@@ -1140,7 +1158,7 @@ begin; <br> select id from t where c = 5 <br> lock in share mode;|  |
 
 **从数据库端主动断开连接可能是有损的，尤其是有的应用端收到这个错误后，不重新连接，而是直接用这个已经不能用的句柄重试查询**。这会导致从应用端看上去，“MySQL 一直没恢复”。
 
-#### 第二种方法：减少连接过程的消耗。
+#### 第二种方法：减少连接过程的消耗
 
 有的业务代码会在短时间内先大量申请数据库连接做备用，如果现在数据库确认是被连接行为打挂了，那么一种可能的做法，是==让数据库跳过权限验证阶段==。
 
@@ -1156,13 +1174,13 @@ begin; <br> select id from t where c = 5 <br> lock in share mode;|  |
 2. **SQL 语句没写好**；
 3. **MySQL 选错了索引**。
 
-#### 导致慢查询的第一种可能是，索引没有设计好。
+#### 导致慢查询的第一种可能是，索引没有设计好
 
 1. 在备库 B 上执行 set sql_log_bin=off，也就是不写 binlog，然后执行 alter table 语句加上索引；
 2. 执行主备切换；
 3. 这时候主库是 B，备库是 A。在 A 上执行 set sql_log_bin=off，然后执行 alter table 语句加上索引。
 
-#### 导致慢查询的第三种可能，MySQL 选错了索引。
+#### 导致慢查询的第三种可能，MySQL 选错了索引
 
 这时候，应急方案就是给这个语句加上 force index。
 
@@ -1275,24 +1293,24 @@ MySQL 为了让组提交的效果更好，把 redo log 做 fsync 的时间拖到
 1. redo log 和 binlog 都是顺序写，磁盘的顺序写比随机写速度要快；
 2. 组提交机制，可以大幅度降低磁盘的 IOPS 消耗。
 
-**++如果你的 MySQL 现在出现了性能瓶颈，而且瓶颈在 <font color=red>IO</font> 上，可以通过哪些方法来提升性能呢？++**
+**如果你的 MySQL 现在出现了性能瓶颈，而且瓶颈在 IO 上，可以通过哪些方法来提升性能呢？**
 
 1. 设置 binlog_group_commit_sync_delay 和 binlog_group_commit_sync_no_delay_count 参数，减少 binlog 的写盘次数。这个方法是基于“额外的故意等待”来实现的，因此可能会增加语句的响应时间，但没有丢失数据的风险。
 2. 将 sync_binlog 设置为大于 1 的值（比较常见是 100~1000）。这样做的风险是，主机掉电时会丢 binlog 日志。
 3. 将 innodb_flush_log_at_trx_commit 设置为 2。这样做的风险是，主机掉电的时候会丢数据。
 
-**Q1:** 执行一个 update 语句以后，我再去执行 hexdump 命令直接查看 ibd 文件内容，为什么没有看到数据有改变呢？<br/>
+**Q1:** 执行一个 update 语句以后，我再去执行 hexdump 命令直接查看 ibd 文件内容，为什么没有看到数据有改变呢？  
 **A1:** 这可能是因为 WAL 机制的原因。update 语句执行完成后，InnoDB 只保证写完了 redo log、内存，可能还没来得及将数据写到磁盘
 
-**Q2:** 为什么 binlog cache 是每个线程自己维护的，而 redo log buffer 是全局共用的？<br/>
+**Q2:** 为什么 binlog cache 是每个线程自己维护的，而 redo log buffer 是全局共用的？  
 **A2:** MySQL 这么设计的主要原因是，binlog 是不能“被打断的”。一个事务的 binlog 必须连续写，因此要整个事务完成后，再一起写到文件里。
 
 而 redo log 并没有这个要求，中间有生成的日志可以写到 redo log buffer 中。redo log buffer 中的内容还能“搭便车”，其他事务提交的时候可以被一起写到磁盘中。
 
-**Q3:** 事务执行期间，还没到提交阶段，如果发生 crash 的话，redo log 肯定丢了，这会不会导致主备不一致呢？<br/>
+**Q3:** 事务执行期间，还没到提交阶段，如果发生 crash 的话，redo log 肯定丢了，这会不会导致主备不一致呢？  
 **A3:** 不会。因为这时候 binlog 也还在 binlog cache 里，没发给备库。crash 以后 redo log 和 binlog 都没有了，从业务角度看这个事务也没有提交，所以数据是一致的。
 
-**Q4:** 如果 binlog 写完盘以后发生 crash，这时候还没给客户端答复就重启了。等客户端再重连进来，发现事务已经提交成功了，这是不是 bug？<br/>
+**Q4:** 如果 binlog 写完盘以后发生 crash，这时候还没给客户端答复就重启了。等客户端再重连进来，发现事务已经提交成功了，这是不是 bug？  
 **A4:** 不是。
 你可以设想一下更极端的情况，整个事务都提交成功了，redo log commit 完成了，备库也收到 binlog 并执行了。但是主库和客户端网络断开了，导致事务成功的包返回不回去，这时候客户端也会收到“网络断开”的异常。这种也只能算是事务成功的，不能认为是 bug。
 
@@ -1754,7 +1772,7 @@ mysqlbinlog File --stop-datetime=T --start-datetime=T
 2. 在新主库 A’ 上， R 这一行也已经存在，日志是写在 123 这个位置之后的；
 3. 我们在从库 B 上执行 change master 命令，指向 A’ 的 File 文件的 123 位置，就会把插入 R 这一行数据的 binlog 又同步到从库 B 去执行。
 
-这时候，从库 B 的同步线程就会报告 <code>Duplicate entry ‘id_of_R’ for key ‘PRIMARY’</code> 错误，提示出现了主键冲突，然后停止同步。
+这时候，从库 B 的同步线程就会报告 `Duplicate entry ‘id_of_R’ for key ‘PRIMARY’` 错误，提示出现了主键冲突，然后停止同步。
 
 > **通常情况下，我们在切换任务的时候，要先主动跳过这些错误，有两种常用的方法。**
 
@@ -2658,7 +2676,7 @@ MySQL 客户端发送请求后，接收服务端返回结果的方式有两种�
 
 ### 全表扫描对 server 层的影响
 
-假设，我们现在要对一个 200G 的 InnoDB 表 db1. t，执行一个全表扫描。然后把扫描结果保存在客户端，会使用类似这样的命令：
+假设，我们现在要对一个 200G 的 InnoDB 表 db1.t，执行一个全表扫描。然后把扫描结果保存在客户端，会使用类似这样的命令：
 
 ```mysql
 mysql -h$host -P$port -u$user -p$pwd -e "select * from db1.t" > $target_file
@@ -2678,7 +2696,7 @@ mysql -h$host -P$port -u$user -p$pwd -e "select * from db1.t" > $target_file
 从这个流程中可以看到：
 
 1. 一个查询在发送过程中，占用的 MySQL 内部的内存最大就是 net_buffer_length 这么大，并不会达到 200G；
-2. socket send buffer 也不可能达到 200G（默认定义 /proc/sys/net/core/wmem_default），如果 socket send buffer 被写满，就会暂停读数据的流程。
+2. `socket send buffer` 也不可能达到 200G（默认定义 /proc/sys/net/core/wmem_default），如果 `socket send buffer` 被写满，就会暂停读数据的流程。
 
 **MySQL 是“边读边发的”**，这个概念很重要。这就意味着，如果客户端接收得慢，会导致 MySQL 服务端由于结果发不出去，这个事务的执行时间变长。  
 故意让客户端不去读 socket receive buffer 中的内容，下图是在服务端 show processlist 看到的结果。
@@ -3015,6 +3033,7 @@ select * from t1 where a>=1 and a<=100;
 **MRR 能够提升性能的核心在于**，这条查询语句在索引 a 上做的是一个范围查询（也就是说，这是一个多值查询），可以得到足够多的主键 id。这样**通过排序以后，再去主键索引查数据，才能体现出“顺序性”的优势。**
 
 ### Batched Key Access
+
 > 5.6 版本后开始引入的 Batched Key Access(BKA)
 
 **NLJ 算法执行的逻辑是**：从驱动表 t1，一行行地取出 a 的值，再到被驱动表 t2 去做 join。也就是说，对于表 t2 来说，每次都是匹配一个值。这时，MRR 的优势就用不上了。
@@ -3058,6 +3077,7 @@ set optimizer_switch='mrr=on,mrr_cost_based=off,batched_key_access=on';
 一些情况下，我们可以直接在被驱动表上建索引，这时就可以直接转成 BKA 算法了。
 
 但是，有时候会碰到一些不适合在被驱动表上建索引的情况。比如下面这个语句：
+
 ```mysql
 select * from t1 join t2 on (t1.b=t2.b) where t2.b>=1 and t2.b<=2000;
 # 在表 t2 中插入了 100 万行数据，但是经过 where 条件过滤后，需要参与 join 的只有 2000 行数据。如果这条语句同时是一个低频的 SQL 语句，那么再为这个语句在表 t2 的字段 b 上创建一个索引就很浪费了。
@@ -3081,6 +3101,7 @@ explain 结果里 Extra 字段显示使用了 BNL 算法。在我的测试环境
 3. 让表 t1 和 tmp_t 做 join 操作。
 
 对应的 sql 如下：
+
 ```mysql
 create temporary table temp_t(id int primary key, a int, b int, index(b))engine=innodb;
 insert into temp_t select * from t2 where b>=1 and b<=2000;
@@ -3130,6 +3151,7 @@ select * from t1 join t2 on(t1.a=t2.a) join t3 on (t2.b=t3.b) where t1.c>=X and 
 ## 36 | 为什么临时表可以重名？
 
 首先先说以下内存表和临时表：
+
 - **内存表**，指的是使用 Memory 引擎的表，建表语法是 create table … engine=memory。这种表的数据都保存在内存里，系统重启的时候会被清空，但是表结构还在。除了这两个特性看上去比较“奇怪”外，从其他的特征上看，它就是一个正常的表。
 - **临时表**，可以使用各种引擎类型 。如果是使用 InnoDB 引擎或者 MyISAM 引擎的临时表，写数据的时候是写到磁盘上的。当然，临时表也可以使用 Memory 引擎。
 
@@ -3453,7 +3475,7 @@ insert into t1 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(0,0)
 insert into t2 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(0,0);
 ```
 
-分别执行 select * from t1 和 select * from t2。
+分别执行 `select * from t1 和 select * from t2`。
 
 ![image](https://mail.wangkekai.cn/05973FF5-DA5A-46A3-98EC-C5620780A70C.png)
 
@@ -4390,15 +4412,18 @@ MySQL 从 5.7.17 开始，将 MyISAM 分区表标记为即将弃用 (deprecated)
 如果一项业务跑的时间足够长，往往就会有根据时间删除历史数据的需求。这时候，按照时间分区的分区表，就可以直接通过 alter table t drop partition …这个语法删掉分区，从而删掉过期的历史数据。
 
 这个 alter table t drop partition …操作是直接删除分区文件，效果跟 drop 普通表类似。与使用 delete 语句删除数据相比，优势是速度快、对系统影响小。
+
 ## 44 | 答疑文章（三）：说一说这些好问题
 
 ### join 的写法
 
 先说两个问题：
+
 1. 如果用 left join 的话，左边的表一定是驱动表吗？
 2. 如果两个表的 join 包含多个条件的等值匹配，是都要写到 on 里面呢，还是只把一个条件写到 on 里面，其他条件写到 where 部分？
 
 构造两个表 a 和 b：
+
 ```mysql
 create table a(f1 int, f2 int, index(f1))engine=innodb;
 create table b(f1 int, f2 int)engine=innodb;
@@ -4473,6 +4498,7 @@ select * from a join b on(a.f1=b.f1) where (a.f2=b.f2);/*Q4*/
 ![image](https://mail.wangkekai.cn/1614607341284.jpg)
 
 可以看到，这两条语句都被改写成：
+
 ```mysql
 select * from a join b where (a.f1=b.f1) and (a.f2=b.f2);
 ```
@@ -4501,15 +4527,17 @@ Simple Nested Loop Join 算法的执行逻辑是：顺序取出驱动表中的�
 
 ### distinct 和 group by 的性能
 
-如果只需要去重，不需要执行聚合函数，distinct 和 group by 哪种效率高一些呢？ 
+如果只需要去重，不需要执行聚合函数，distinct 和 group by 哪种效率高一些呢?
 
 如果表 t 的字段 a 上没有索引，那么下面这两条语句：
+
 ```mysql
 select a from t group by a order by null;
 select distinct a from t;
 ```
 
 首先需要说明的是，这种 group by 的写法，并不是 SQL 标准的写法。标准的 group by 语句，是需要在 select 部分加一个聚合函数，比如：
+
 ```mysql
 select a,count(*) from t group by a order by null;
 ```
@@ -4535,6 +4563,7 @@ select a,count(*) from t group by a order by null;
 其次，这个问题限定在 statement 格式下，也是对的。因为 row 格式的 binlog 就没有这个问题了，Write row event 里面直接写了每一行的所有字段的值。
 
 而至于为什么不会发生不一致的情况，我们来看一下下面的这个例子。
+
 ```mysql
 create table t(id int auto_increment primary key);
 insert into t values(null);
@@ -4545,6 +4574,7 @@ insert into t values(null);
 在 insert 语句之前，还有一句 SET INSERT_ID=1。这条命令的意思是，这个线程里下一次需要用到自增值的时候，不论当前表的自增值是多少，固定用 1 这个值。
 
 这个 SET INSERT_ID 语句是固定跟在 insert 语句之前的，比如 @帽子掉了同学提到的场景，主库上语句 A 的 id 是 1，语句 B 的 id 是 2，但是写入 binlog 的顺序先 B 后 A，那么 binlog 就变成：
+
 ```mysql
 SET INSERT_ID=2;
 语句 B；
