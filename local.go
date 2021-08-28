@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -234,22 +235,78 @@ func GetInfo(wg *sync.WaitGroup, res chan *Info) {
 	return
 }
 
-func main() {
+func getConfig() {
+	res := []int{1, 2, 3, 4}
 
-	var res = make(chan *Info, 1)
-	var user User
+	wg := sync.WaitGroup{}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	for index := range res {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			fmt.Println(res[index])
 
-	go GetInfo(&wg, res)
+			return
+		}(index)
+	}
 
 	wg.Wait()
 
-	i := <-res
-	user.Info = i
+	fmt.Println("---------get")
+}
 
-	fmt.Println(user.Info)
+var n = -99
+
+func main() {
+
+	var x, y int32
+
+	go func() {
+		for {
+			x = atomic.AddInt32(&x, 1)
+			y = atomic.AddInt32(&x, 1)
+		}
+
+	}()
+
+	time.Sleep(1 * time.Second)
+	fmt.Println(x, y)
+
+	// m := make(map[string]int, n)
+	// println(m["Go"])
+
+	// getConfig()
+
+	// fmt.Println("--------go end")
+
+	// res := []int{1, 2, 3, 4}
+
+	// wg := sync.WaitGroup{}
+
+	// for index := range res {
+	// 	wg.Add(1)
+	// 	go func() {
+	// 		defer wg.Done()
+	// 		fmt.Println(res[index])
+	// 	}()
+	// }
+
+	// wg.Wait()
+
+	// var res = make(chan *Info, 1)
+	// var user User
+
+	// var wg sync.WaitGroup
+	// wg.Add(1)
+
+	// go GetInfo(&wg, res)
+
+	// wg.Wait()
+
+	// i := <-res
+	// user.Info = i
+
+	// fmt.Println(user.Info)
 
 	// id := ""
 
