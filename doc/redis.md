@@ -2,11 +2,11 @@
 
 ## 1. string-字符串
 
-字符串结构使用非常广泛，**一个常见的用途就是缓存用户信息**。我们将用户信息结构体使用  JSON 序列化成字符串，然后将序列化后的字符串塞进 Redis 来缓存。同样，取用户信息会经过一次反序列化的过程。
+字符串结构使用非常广泛，**一个常见的用途就是缓存用户信息**。我们将用户信息结构体使用 JSON 序列化成字符串，然后将序列化后的字符串塞进 Redis 来缓存。同样，取用户信息会经过一次反序列化的过程。
 
-Redis 的字符串是动态字符串，是可以修改的字符串，内部结构实现上类似于 Java 的 ArrayList，采用预分配冗余空间的方式来减少内存的频繁分配，如图中所示，<u>内部为当前字符串实际分配的空间  capacity 一般要高于实际字符串长度 len</u>。  
-<span style="color:red">当字符串长度小于 1M 时，扩容都是加倍现有的空间，如果超过 1M，扩容时一次只会多扩 1M 的空间。需要注意的是字符串最大长度为 512M</span>。
-> 创建字符串时  len 和  capacity 一样长，不会多分配冗余空间，这是因为绝大多数场景下我们不会使用  append 操作来修改字符串
+Redis 的字符串是动态字符串，是可以修改的字符串，内部结构实现上类似于 Java 的 `ArrayList`，采用预分配冗余空间的方式来减少内存的频繁分配，如图中所示，*内部为当前字符串实际分配的空间 `capacity` 一般要高于实际字符串长度 len*。  
+**当字符串长度小于 1M 时，扩容都是加倍现有的空间，如果超过 1M，扩容时一次只会多扩 1M 的空间。需要注意的是字符串最大长度为 512M**。
+> 创建字符串时 len 和 capacity 一样长，不会多分配冗余空间，这是因为绝大多数场景下我们不会使用  append 操作来修改字符串
 
 ```redis
 > set name codehole 
@@ -52,12 +52,10 @@ OK
 
 > setex name 5 codehole  # 5s 后过期，等价于 set+expire
 
-> setnx name codehole  # 如果 name 不存在就执行 set 创建
-(integer) 1
+> setnx name codehole  # 如果 name 不存在就执行 set 创建，如果已经存在，set 创建不成功
+(integer) 1 / 0
 > get name
 "codehole"
-> setnx name holycoder
-(integer) 0  # 因为 name 已经存在，所以 set 创建不成功
 
 // set 指令扩展
 > set lock:codehole true ex 5 nx
@@ -66,28 +64,29 @@ OK
 
 ### 过期的 key 集合
 
-redis 会将每个设置了过期时间的  key 放入到一个独立的字典中，以后会定时遍历这个字典来删除到期的 key。  
-除了<font color=red>定时遍历之外，它还会使用惰性策略来删除过期的 key。</font>
+redis 会将每个设置了过期时间的 key 放入到一个独立的字典中，以后会定时遍历这个字典来删除到期的 key。  
+除了**定时遍历之外，它还会使用惰性策略来删除过期的 key**。
 > 所谓惰性策略就是在客户端访问这个  key 的时候， redis 对  key 的过期时间进行检查，如果过期了就立即删除。
 
-<font color=red>**定时删除是集中处理，惰性删除是零散处理**。</font>
+**定时删除是集中处理，惰性删除是零散处理**。
 
 ### 定时扫描策略
 
 Redis 默认会每秒进行十次过期扫描，过期扫描不会遍历过期字典中所有的 key，而是采用了一种简单的**贪心策略**。
 
-1. 从过期字典中随机 20 个 key；
-1. 删除这 20 个 key 中已经过期的 key；
-1. 如果过期的 key 比率超过 1/4，那就重复步骤 1；
+1. 从过期字典中随机 20 个 key
+2. 删除这 20 个 key 中已经过期的 key
+3. 如果过期的 key 比率超过 1/4，那就重复步骤 1
 
 > 同时，为了保证过期扫描不会出现循环过度，导致线程卡死现象，算法还增加了扫描时间的上限，默认不会超过 25ms。
 
-<u>设想一个大型的 Redis 实例中所有的 key 在同一时间过期了，会出现怎样的结果？</u>
+*设想一个大型的 Redis 实例中所有的 key 在同一时间过期了，会出现怎样的结果？*
 
-> 毫无疑问，Redis 会持续扫描过期字典 (循环多次)，直到过期字典中过期的 key 变得稀疏，才会停止 (循环次数明显下降)。这就会导致线上读写请求出现明显的卡顿现象。导致这种卡顿的另外一种原因是内存管理器需要频繁回收内存页，这也会产生一定的 CPU 消耗。  
+> 毫无疑问，Redis 会持续扫描过期字典 (循环多次)，直到过期字典中过期的 key 变得稀疏，才会停止 (循环次数明显下降)。这就会导致线上读写请求出现明显的卡顿现象。导致这种卡顿的另外一种原因是内存管理器需要频繁回收内存页，这也会产生一定的 CPU 消耗。
+
 当客户端请求到来时，服务器如果正好进入过期扫描状态，客户端的请求将会等待至少 25ms 后才会进行处理，如果客户端将超时时间设置的比较短，比如 10ms，那么就会出现大量的链接因为超时而关闭，业务端就会出现很多异常。而且这时你还无法从 Redis 的 slowlog 中看到慢查询记录，因为慢查询指的是逻辑处理过程慢，不包含等待时间。
 
-所以业务开发人员一定要注意过期时间，如果有大批量的 key 过期，要给过期时间设置一个随机范围，而不宜全部在同一时间过期，分散过期处理的压力。
+所以业务开发人员一定要注意过期时间，**如果有大批量的 key 过期，要给过期时间设置一个随机范围，而不宜全部在同一时间过期，分散过期处理的压力**。
 
 ```redis
 redis.expire_at(key, random.randint(86400) + expire_ts)
@@ -95,23 +94,23 @@ redis.expire_at(key, random.randint(86400) + expire_ts)
 
 ### 从库的过期策略
 
-从库不会进行过期扫描，从库对过期的处理是被动的。主库在 key 到期时，会在 AOF 文件里增加一条   del  指令，同步到所有的从库，从库通过执行这条  del 指令来删除过期的 key。
+从库不会进行过期扫描，从库对过期的处理是被动的。主库在 key 到期时，会在 AOF 文件里增加一条 `del` 指令，同步到所有的从库，从库通过执行这条  del 指令来删除过期的 key。
 
-> **++字符串是由多个字节组成，每个字节又是由 8 个 bit 组成++**，如此便可以将一个字符串看成很多 bit 的组合，这便是  bitmap「位图」数据结构
+> **字符串是由多个字节组成，每个字节又是由 8 个 bit 组成**，如此便可以将一个字符串看成很多 bit 的组合，这便是 bitmap「位图」数据结构
 
 ### string内部结构
 
-<u>Redis 中的字符串是可以修改的字符串，在内存中它是以字节数组的形式存在的。</u>  
-我们知道 C 语言里面的字符串标准形式是以 NULL 作为结束符，但是在 Redis 里面字符串不是这么表示的。因为要获取 NULL 结尾的字符串的长度使用的是 strlen 标准库函数，这个函数的算法复杂度是 O(n)，它需要对字节数组进行遍历扫描，作为单线程的 Redis 表示承受不起。
+**Redis 中的字符串是可以修改的字符串，在内存中它是以字节数组的形式存在的**。  
+我们知道 C 语言里面的字符串标准形式是以 `NULL` 作为结束符，但是在 Redis 里面字符串不是这么表示的。因为要获取 `NULL` 结尾的字符串的长度使用的是 strlen 标准库函数，这个函数的算法复杂度是 O(n)，它需要对字节数组进行遍历扫描，作为单线程的 Redis 表示承受不起。
 
-Redis 的字符串叫着 「SDS」，也就是 Simple Dynamic String。它的结构是一个带长度信息的字节数组。
+Redis 的字符串叫着「SDS」，也就是 `Simple Dynamic String`。它的结构是一个带长度信息的字节数组。
 
-```redis
+```c++
 struct SDS<T> {
-  T capacity; // 数组容量 - 1byte
-  T len; // 数组长度 - 1byte
-  byte flags; // 特殊标识位，不理睬它 - 1byte
-  byte[] content; // 数组内容
+    T capacity; // 数组容量 - 1byte
+    T len; // 数组长度 - 1byte
+    byte flags; // 特殊标识位，不理睬它 - 1byte
+    byte[] content; // 数组内容
 }
 ```
 
@@ -119,11 +118,11 @@ struct SDS<T> {
 
 capacity **表示所分配数组的长度**，len **表示字符串的实际长度**。前面我们提到字符串是可以修改的字符串，它要支持 append 操作。如果数组没有冗余空间，那么追加操作必然涉及到分配新数组，然后将旧内容复制过来，再 append 新内容。如果字符串的长度非常长，这样的内存分配和复制开销就会非常大。
 
-> 上面的  SDS 结构使用了范型  T，为什么不直接用  int 呢，这是因为当字符串比较短时， len 和  capacity 可以使用  byte 和  short 来表示，Redis 为了对内存做极致的优化，不同长度的字符串使用不同的结构体来表示。
+> 上面的 SDS 结构使用了范型 T，为什么不直接用 int 呢，这是因为当字符串比较短时，len 和 capacity 可以使用 byte 和 short 来表示，Redis 为了对内存做极致的优化，不同长度的字符串使用不同的结构体来表示。
 
 ### embstr vs raw
 
-Redis 的字符串有两种存储方式，在长度特别短时，使用  emb 形式存储  (embeded)，当长度超过 44 时，使用  raw 形式存储。
+Redis 的字符串有两种存储方式，在长度特别短时，使用 emb 形式存储 (embeded)，当长度超过 44 时，使用  raw 形式存储。
 
 所有的 Redis 对象都有下面的这个结构头:
 
@@ -137,7 +136,7 @@ struct RedisObject {
 } robj;
 ```
 
-接着我们再看 SDS 结构体的大小，在字符串比较小时，SDS 对象头的大小是capacity+3，至少是 3。意味着分配一个字符串的最小空间占用为 19 字节 (16+3)。
+接着我们再看 SDS 结构体的大小，在字符串比较小时，SDS 对象头的大小是 capacity+3，至少是 3。意味着分配一个字符串的最小空间占用为 19 字节 (16+3)。
 
 ```c++
 struct SDS {
@@ -150,7 +149,7 @@ struct SDS {
 
 ![image](https://mail.wangkekai.cn/9528D65C-6E40-4157-9797-280B11D23E1A.png)
 
-embstr 存储形式是这样一种存储形式，它将 RedisObject 对象头和  SDS 对象连续存在一起，使用 malloc 方法一次分配。而  raw 存储形式不一样，它需要两次 malloc，两个对象头在内存地址上一般是不连续的。
+embstr 存储形式是这样一种存储形式，它将 RedisObject 对象头和 SDS 对象连续存在一起，使用 malloc 方法一次分配。而 raw 存储形式不一样，它需要两次 malloc，两个对象头在内存地址上一般是不连续的。
 
 而内存分配器 jemalloc/tcmalloc 等分配内存大小的单位都是 2、4、8、16、32、64 等等，为了能容纳一个完整的 embstr 对象，jemalloc 最少会分配 32 字节的空间，如果字符串再稍微长一点，那就是 64 字节的空间。如果总体超出了 64 字节，Redis 认为它是一个大字符串，不再使用 emdstr 形式存储，而该用 raw 形式。
 
@@ -164,10 +163,10 @@ embstr 存储形式是这样一种存储形式，它将 RedisObject 对象头和
 
 字符串在长度小于 1M 之前，扩容空间采用加倍策略，也就是保留 100% 的冗余空间。当长度超过 1M 之后，为了避免加倍后的冗余空间过大而导致浪费，每次扩容只会多分配 1M 大小的冗余空间。
 
-## 2.  list - 列表
+## 2. list - 列表
 
-Redis 的列表相当于 Java 语言里面的 LinkedList，<font color=red>注意它是链表而不是数组</font>。  
-**<u>这意味着  list 的插入和删除操作非常快，时间复杂度为  O(1)，但是索引定位很慢，时间复杂度为  O(n)，这点让人非常意外</u>**。
+Redis 的列表相当于 Java 语言里面的 LinkedList，*注意它是链表而不是数组*。  
+**这意味着 list 的插入和删除操作非常快，时间复杂度为 O(1)，但是索引定位很慢，时间复杂度为 O(n)，这点让人非常意外**。
 
 当列表弹出了最后一个元素之后，该数据结构自动被删除，内存被回收。  
 **Redis 的列表结构常用来做异步队列使用**。将需要延后处理的任务结构体序列化成字符串塞进 Redis 的列表，另一个线程从这个列表中轮询数据进行处理。
@@ -194,11 +193,11 @@ Redis 的列表相当于 Java 语言里面的 LinkedList，<font color=red>注�
 (nil)
 ```
 
-index 相当于 Java 链表的 get(int index)方法，它需要对链表进行遍历，性能随着参数 index增大而变差。
+index 相当于 Java 链表的 get(int index)方法，它需要对链表进行遍历，性能随着参数 index 增大而变差。
 
-trim 和字面上的含义不太一样，个人觉得它叫 lretain(保留) 更合适一些，因为  ltrim 跟的两个参数 start_index和end_index定义了一个区间，在这个区间内的值，ltrim 要保留，区间之外统统砍掉。我们可以通过 ltrim来实现一个定长的链表，这一点非常有用。
+trim 和字面上的含义不太一样，个人觉得它叫 lretain(保留) 更合适一些，因为 ltrim 跟的两个参数 start_index 和 end_index 定义了一个区间，在这个区间内的值，ltrim 要保留，区间之外统统砍掉。我们可以通过 ltrim 来实现一个定长的链表，这一点非常有用。
 
-index 可以为负数，index=-1表示倒数第一个元素，同样 index=-2表示倒数第二个元素。
+index 可以为负数，index=-1 表示倒数第一个元素，同样 index=-2 表示倒数第二个元素。
 
 ```redis
 > rpush books python java golang
@@ -222,60 +221,12 @@ OK
 
 ### 快速列表
 
-如果再深入一点，你会发现 Redis 底层存储的还不是一个简单的 linkedlist，而是称之为快速链表 quicklist 的一个结构。
+如果再深入一点，你会发现 Redis 底层存储的还不是一个简单的 linkedlist，而是称之为快速链表 `quicklist` 的一个结构。
 
-<u>首先在列表元素较少的情况下会使用一块连续的内存存储</u>，这个结构是 ziplist，也即是<font color=red>压缩列表</font>。**它将所有的元素紧挨着一起存储，<u>分配的是一块连续的内存</u>**。当数据量比较多的时候才会改成 quicklist。因为普通的链表需要的附加指针空间太大，会比较浪费空间，而且会加重内存的碎片化。比如这个列表里存的只是 int 类型的数据，结构上还需要两个额外的指针 prev 和 next 。所以 Redis 将链表和 ziplist 结合起来组成了 quicklist。也就是将多个 ziplist 使用双向指针串起来使用。这样既满足了快速的插入删除性能，又不会出现太大的空间冗余。
+*首先在列表元素较少的情况下会使用一块连续的内存存储*，这个结构是 ziplist，也就是**压缩列表**。  
+**它将所有的元素紧挨着一起存储，*分配的是一块连续的内存***。当数据量比较多的时候才会改成 quicklist。因为普通的链表需要的附加指针空间太大，会比较浪费空间，而且会加重内存的碎片化。比如这个列表里存的只是 int 类型的数据，结构上还需要两个额外的指针 prev 和 next 。所以 Redis 将链表和 ziplist 结合起来组成了 quicklist。也就是将多个 ziplist 使用双向指针串起来使用。这样既满足了快速的插入删除性能，又不会出现太大的空间冗余。
 
-### 压缩列表
-
-Redis 为了节约内存空间使用， zset 和  hash 容器对象在元素个数较少的时候，采用 压缩列表 (ziplist) 进行存储。  
-**<u>压缩列表是一块连续的内存空间，元素之间紧挨着存储，没有任何冗余空隙</u>。**
-
-```redis
-//  encoding 字段都是 ziplist
-> zadd programmings 1.0 go 2.0 python 3.0 java
-(integer) 3
-> debug object programmings
-Value at:0x7fec2de00020 refcount:1 encoding:ziplist serializedlength:36 lru:6022374 lru_seconds_idle:6
-> hmset books go fast python slow java fast
-OK
-> debug object books
-Value at:0x7fec2de000c0 refcount:1 encoding:ziplist serializedlength:48 lru:6022478 lru_seconds_idle:1
-```
-
-```redis
-struct ziplist<T> {
-    int32 zlbytes; // 整个压缩列表占用字节数
-    int32 zltail_offset; // 最后一个元素距离压缩列表起始位置的偏移量，用于快速定位到最后一个节点
-    int16 zllength; // 元素个数
-    T[] entries; // 元素内容列表，挨个挨个紧凑存储
-    int8 zlend; // 标志压缩列表的结束，值恒为 0xFF
-}
-```
-
-> 压缩列表为了支持双向遍历，所以才会有 ztail_offset这个字段，用来快速定位到最后一个元素，然后倒着遍历。
-
-### 增加元素
-
-因为 ziplist 都是紧凑存储，没有冗余空间 (对比一下 Redis 的字符串结构)。意味着插入一个新的元素就需要调用 realloc 扩展内存。取决于内存分配器算法和当前的 ziplist 内存大小，realloc 可能会重新分配新的内存空间，并将之前的内容一次性拷贝到新的地址，也可能在原有的地址上进行扩展，这时就不需要进行旧内容的内存拷贝。
-
-如果 ziplist 占据内存太大，重新分配内存和拷贝内存就会有很大的消耗。所以 <font color=red>ziplist</font> 不适合存储大型字符串，存储的元素也不宜过多。
-
-### IntSet 小整数集合
-
-当 set 集合容纳的元素都是整数并且元素个数较小时，Redis 会使用 intset 来存储结合元素。intset 是紧凑的数组结构，同时支持 16 位、32 位和 64 位整数。
-
-```redis
-struct intset<T> {
-    int32 encoding; // 决定整数位宽是 16 位、32 位还是 64 位
-    int32 length; // 元素个数
-    int<T> contents; // 整数数组，可以是 16 位、32 位和 64 位
-}
-```
-
-### 快速列表
-
-Redis 早期版本存储  list 列表数据结构使用的是压缩列表 ziplist 和普通的双向链表 linkedlist ，也就是元素少时用 ziplist，元素多时用 linkedlist。
+Redis 早期版本存储 list 列表数据结构使用的是压缩列表 ziplist 和普通的双向链表 linkedlist，也就是元素少时用 ziplist，元素多时用 linkedlist。
 
 ```c++
 // 链表的节点
@@ -304,21 +255,68 @@ Value at:0x7fec2dc2bde0 refcount:1 encoding:quicklist serializedlength:31 lru:61
 **注意观察上面输出字段 encoding 的值。 quicklist 是 ziplist 和 linkedlist 的混合体，它将  linkedlist 按段切分，每一段使用 ziplist 来紧凑存储，多个 ziplist 之间使用双向指针串接起来。**
 ![image](https://mail.wangkekai.cn/7AAB35D9-BBDB-46C0-879F-04746234203D.png)
 
+### 压缩列表
+
+Redis 为了节约内存空间使用，zset 和 hash 容器对象在元素个数较少的时候，采用压缩列表 (ziplist) 进行存储。  
+**压缩列表是一块连续的内存空间，元素之间紧挨着存储，没有任何冗余空隙。**
+
+```redis
+//  encoding 字段都是 ziplist
+> zadd programmings 1.0 go 2.0 python 3.0 java
+(integer) 3
+> debug object programmings
+Value at:0x7fec2de00020 refcount:1 encoding:ziplist serializedlength:36 lru:6022374 lru_seconds_idle:6
+> hmset books go fast python slow java fast
+OK
+> debug object books
+Value at:0x7fec2de000c0 refcount:1 encoding:ziplist serializedlength:48 lru:6022478 lru_seconds_idle:1
+```
+
+```c++
+struct ziplist<T> {
+    int32 zlbytes; // 整个压缩列表占用字节数
+    int32 zltail_offset; // 最后一个元素距离压缩列表起始位置的偏移量，用于快速定位到最后一个节点
+    int16 zllength; // 元素个数
+    T[] entries; // 元素内容列表，挨个挨个紧凑存储
+    int8 zlend; // 标志压缩列表的结束，值恒为 0xFF
+}
+```
+
+> 压缩列表为了支持双向遍历，所以才会有 ztail_offset 这个字段，用来快速定位到最后一个元素，然后倒着遍历。
+
+### 增加元素
+
+因为 ziplist 都是紧凑存储，没有冗余空间 (对比一下 Redis 的字符串结构)。意味着插入一个新的元素就需要调用 realloc 扩展内存。取决于内存分配器算法和当前的 ziplist 内存大小，realloc 可能会重新分配新的内存空间，并将之前的内容一次性拷贝到新的地址，也可能在原有的地址上进行扩展，这时就不需要进行旧内容的内存拷贝。
+
+如果 ziplist 占据内存太大，重新分配内存和拷贝内存就会有很大的消耗。所以 **ziplist 不适合存储大型字符串，存储的元素也不宜过多**。
+
+### IntSet 小整数集合
+
+当 set 集合容纳的元素都是整数并且元素个数较小时，Redis 会使用 intset 来存储结合元素。intset 是紧凑的数组结构，同时支持 16 位、32 位和 64 位整数。
+
+```c++
+struct intset<T> {
+    int32 encoding; // 决定整数位宽是 16 位、32 位还是 64 位
+    int32 length; // 元素个数
+    int<T> contents; // 整数数组，可以是 16 位、32 位和 64 位
+}
+```
+
 ### 每个 ziplist 存多少元素？
 
-<font color=red>quicklist</font> 内部默认单个 ziplist 长度为 8k 字节，超出了这个字节数，就会新起一个 ziplist。ziplist 的长度由配置参数 list-max-ziplist-size决定。
+`quicklist` 内部默认单个 ziplist 长度为 8k 字节，超出了这个字节数，就会新起一个 ziplist。ziplist 的长度由配置参数 list-max-ziplist-size 决定。
 
 ### 压缩深度
 
 ![image](https://mail.wangkekai.cn/71ABE178-6788-4362-90F7-EB1F74495E9E.png)
-quicklist 默认的压缩深度是 0，也就是不压缩。压缩的实际深度由配置参数 list-compress-depth决定。为了支持快速的 push/pop 操作，quicklist 的首尾两个 ziplist 不压缩，此时深度就是 1。如果深度为 2，就表示 quicklist 的首尾第一个 ziplist 以及首尾第二个 ziplist 都不压缩。
+quicklist 默认的压缩深度是 0，也就是不压缩。压缩的实际深度由配置参数 list-compress-depth 决定。为了支持快速的 push/pop 操作，quicklist 的首尾两个 ziplist 不压缩，此时深度就是 1。如果深度为 2，就表示 quicklist 的首尾第一个 ziplist 以及首尾第二个 ziplist 都不压缩。
 
 ## 3. hash - 字典
 
-Redis 的字典相当于 Java 语言里面的 HashMap，它是<font color=red>无序字典</font>。内部实现结构上同 Java 的 HashMap 也是一致的，**<u>同样的数组 + 链表二维结构。第一维 hash 的数组位置碰撞时，就会将碰撞的元素使用链表串接起来</u>**。
+Redis 的字典相当于 Java 语言里面的 HashMap，它是**无序字典**。内部实现结构上同 Java 的 HashMap 也是一致的，**同样的数组 + 链表二维结构。第一维 hash 的数组位置碰撞时，就会将碰撞的元素使用链表串接起来**。
 ![image](https://mail.wangkekai.cn/999C4B1B-8CD5-42E5-BF26-74022C9B2326.png)
 
-Redis 的字典的值只能是字符串，另外它们  rehash 的方式不一样，因为 Java 的 HashMap 在字典很大时，rehash 是个耗时的操作，需要一次性全部 rehash。<font color=red>Redis 为了高性能，不能堵塞服务，所以采用了渐进式 rehash 策略。</font>
+Redis 的字典的值只能是字符串，另外它们 rehash 的方式不一样，因为 Java 的 HashMap 在字典很大时，rehash 是个耗时的操作，需要一次性全部 rehash。**Redis 为了高性能，不能堵塞服务，所以采用了渐进式 rehash 策略。**
 ![image](https://mail.wangkekai.cn/C5E5EF39-9A78-4D29-A1F7-C3983C4F4A58.png)
 
 渐进式 rehash 会在 rehash 的同时，保留新旧两个 hash 结构，查询时会同时查询两个 hash 结构，然后在后续的定时任务中以及 hash 操作指令中，循序渐进地将旧 hash 的内容一点点迁移到新的 hash 结构中。当搬迁完成了，就会使用新的 hash 结构取而代之。
@@ -358,9 +356,9 @@ OK
 ### dict - 内部结构
 
 dict 是 Redis 服务器中出现最为频繁的复合型数据结构，除了 hash 结构的数据会用到字典外，**整个 Redis 数据库的所有 key 和 value 也组成了一个全局字典**，还有带过期时间的 key 集合也是一个字典。  
-**<u>zset 集合中存储 value 和 score 值的映射关系也是通过 dict 结构实现的。</u>**
+**zset 集合中存储 value 和 score 值的映射关系也是通过 dict 结构实现的。**
 
-```redis
+```c++
 struct RedisDb {
     dict* dict; // all keys  key=>value
     dict* expires; // all expired keys key=>long(timestamp)
@@ -375,17 +373,17 @@ struct zset {
 
 ![image](https://mail.wangkekai.cn/0EE01A26-57D5-455A-A842-0586AA9D885D.png)
 
-<font color=red>dict</font> 结构内部包含两个 hashtable，通常情况下只有一个 hashtable 是有值的。但是在 dict 扩容缩容时，需要分配新的 hashtable，然后进行渐进式搬迁，这时候两个 hashtable 存储的分别是旧的 hashtable 和新的  hashtable。待搬迁结束后，旧的 hashtable 被删除，新的 hashtable 取而代之。
+`dict` 结构内部包含两个 hashtable，通常情况下只有一个 hashtable 是有值的。但是在 dict 扩容缩容时，需要分配新的 hashtable，然后进行渐进式搬迁，这时候两个 hashtable 存储的分别是旧的 hashtable 和新的 hashtable。待搬迁结束后，旧的 hashtable 被删除，新的 hashtable 取而代之。
 
 ### 渐进式 rehash
 
-大字典的扩容是比较耗时间的，需要重新申请新的数组，然后将旧字典所有链表中的元素重新挂接到新的数组下面，这是一个 O(n) 级别的操作，作为单线程的Redis表示很难承受这样耗时的过程。步子迈大了会扯着蛋，所以Redis使用渐进式 rehash 小步搬迁。虽然慢一点，但是肯定可以搬完。
+大字典的扩容是比较耗时间的，需要重新申请新的数组，然后将旧字典所有链表中的元素重新挂接到新的数组下面，这是一个 O(n) 级别的操作，作为单线程的Redis表示很难承受这样耗时的过程。步子迈大了会扯着蛋，所以 Redis 使用渐进式 rehash 小步搬迁。虽然慢一点，但是肯定可以搬完。
 
 ### 查找过程
 
 插入和删除操作都依赖于查找，先必须把元素找到，才可以进行数据结构的修改操作。hashtable 的元素是在第二维的链表上，所以首先我们得想办法定位出元素在哪个链表上。
 
-```c
+```c++
 func get(key) {
     let index = hash_func(key) % size;
     let entry = table[index];
@@ -398,7 +396,7 @@ func get(key) {
 }
 ```
 
-值得注意的是代码中的hash_func，它会将 key 映射为一个整数，不同的 key 会被映射成分布比较均匀散乱的整数。只有 hash 值均匀了，整个 hashtable 才是平衡的，所有的二维链表的长度就不会差距很远，查找算法的性能也就比较稳定。
+值得注意的是代码中的 hash_func，它会将 key 映射为一个整数，不同的 key 会被映射成分布比较均匀散乱的整数。只有 hash 值均匀了，整个 hashtable 才是平衡的，所有的二维链表的长度就不会差距很远，查找算法的性能也就比较稳定。
 
 ### hash 函数
 
@@ -406,12 +404,12 @@ hashtable 的性能好不好完全取决于 hash 函数的质量。hash 函数�
 
 ### 扩容条件
 
-<font clor=red>正常情况下，当 hash 表中元素的个数等于第一维数组的长度时，就会开始扩容，扩容的新数组是原数组大小的 2 倍。</font>不过如果 Redis 正在做 bgsave，为了减少内存页的过多分离 (Copy On Write)，Redis 尽量不去扩容 (dict_can_resize)，但是如果 hash 表已经非常满了，元素的个数已经达到了第一维数组长度的 5 倍  (dict_force_resize_ratio)，说明 hash 表已经过于拥挤了，这个时候就会强制扩容。
+**正常情况下，当 hash 表中元素的个数等于第一维数组的长度时，就会开始扩容，扩容的新数组是原数组大小的 2 倍**。不过如果 Redis 正在做 bgsave，为了减少内存页的过多分离 (Copy On Write)，Redis 尽量不去扩容 (dict_can_resize)，但是如果 hash 表已经非常满了，元素的个数已经达到了第一维数组长度的 5 倍  (dict_force_resize_ratio)，说明 hash 表已经过于拥挤了，这个时候就会强制扩容。
 
 ### 缩容条件
 
 当 hash 表因为元素的逐渐删除变得越来越稀疏时，Redis 会对 hash 表进行缩容来减少 hash 表的第一维数组空间占用。  
-<font color=red>缩容的条件是元素个数低于数组长度的 10%。缩容不会考虑 Redis 是否正在做 bgsave。</font>
+**缩容的条件是元素个数低于数组长度的 10%。缩容不会考虑 Redis 是否正在做 bgsave。**
 
 ### set 的结构
 
