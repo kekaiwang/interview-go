@@ -8,7 +8,7 @@ Redis 的字符串是动态字符串，是可以修改的字符串，内部结�
 **当字符串长度小于 1M 时，扩容都是加倍现有的空间，如果超过 1M，扩容时一次只会多扩 1M 的空间。需要注意的是字符串最大长度为 512M**。
 > 创建字符串时 len 和 capacity 一样长，不会多分配冗余空间，这是因为绝大多数场景下我们不会使用  append 操作来修改字符串
 
-```redis
+```shell
 > set name codehole 
 OK
 > exists name // 是否存在
@@ -41,7 +41,7 @@ OK
 
 ### 过期和set命令扩展
 
-```redis
+```shell
 // 过期
 > expire name 5  # 5s 后过期
 ...  # wait for 5s
@@ -88,7 +88,7 @@ Redis 默认会每秒进行十次过期扫描，过期扫描不会遍历过期�
 
 所以业务开发人员一定要注意过期时间，**如果有大批量的 key 过期，要给过期时间设置一个随机范围，而不宜全部在同一时间过期，分散过期处理的压力**。
 
-```redis
+```shell
 redis.expire_at(key, random.randint(86400) + expire_ts)
 ```
 
@@ -171,7 +171,7 @@ Redis 的列表相当于 Java 语言里面的 LinkedList，*注意它是链表�
 当列表弹出了最后一个元素之后，该数据结构自动被删除，内存被回收。  
 **Redis 的列表结构常用来做异步队列使用**。将需要延后处理的任务结构体序列化成字符串塞进 Redis 的列表，另一个线程从这个列表中轮询数据进行处理。
 
-```redis
+```shell
 // 队列 - 右进左出
 > rpush books python java golang
 (integer) 3
@@ -199,7 +199,7 @@ trim 和字面上的含义不太一样，个人觉得它叫 lretain(保留) 更�
 
 index 可以为负数，index=-1 表示倒数第一个元素，同样 index=-2 表示倒数第二个元素。
 
-```redis
+```shell
 > rpush books python java golang
 (integer) 3
 > lindex books 1  # O(n) 慎用
@@ -245,22 +245,22 @@ struct list {
 
 考虑到链表的附加空间相对太高，prev 和 next 指针就要占去 16 个字节 (64bit 系统的指针是 8 个字节)，另外每个节点的内存都是单独分配，会加剧内存的碎片化，影响内存管理效率。后续版本对列表数据结构进行了改造，使用 quicklist 代替了 ziplist 和 linkedlist。
 
-```redis
+```shell
 > rpush codehole go java python
 (integer) 3
 > debug object codehole
 Value at:0x7fec2dc2bde0 refcount:1 encoding:quicklist serializedlength:31 lru:6101643 lru_seconds_idle:5 ql_nodes:1 ql_avg_node:3.00 ql_ziplist_max:-2 ql_compressed:0 ql_uncompressed_size:29
 ```
 
-**注意观察上面输出字段 encoding 的值。 quicklist 是 ziplist 和 linkedlist 的混合体，它将  linkedlist 按段切分，每一段使用 ziplist 来紧凑存储，多个 ziplist 之间使用双向指针串接起来。**
+**注意观察上面输出字段 encoding 的值。 quicklist 是 ziplist 和 linkedlist 的混合体，它将  linkedlist 按段切分，每一段使用 ziplist 来紧凑存储，多个 ziplist 之间使用双向指针串接起来**。
 ![image](https://mail.wangkekai.cn/7AAB35D9-BBDB-46C0-879F-04746234203D.png)
 
 ### 压缩列表
 
 Redis 为了节约内存空间使用，zset 和 hash 容器对象在元素个数较少的时候，采用压缩列表 (ziplist) 进行存储。  
-**压缩列表是一块连续的内存空间，元素之间紧挨着存储，没有任何冗余空隙。**
+**压缩列表是一块连续的内存空间，元素之间紧挨着存储，没有任何冗余空隙**。
 
-```redis
+```shell
 //  encoding 字段都是 ziplist
 > zadd programmings 1.0 go 2.0 python 3.0 java
 (integer) 3
@@ -316,7 +316,7 @@ quicklist 默认的压缩深度是 0，也就是不压缩。压缩的实际深�
 Redis 的字典相当于 Java 语言里面的 HashMap，它是**无序字典**。内部实现结构上同 Java 的 HashMap 也是一致的，**同样的数组 + 链表二维结构。第一维 hash 的数组位置碰撞时，就会将碰撞的元素使用链表串接起来**。
 ![image](https://mail.wangkekai.cn/999C4B1B-8CD5-42E5-BF26-74022C9B2326.png)
 
-Redis 的字典的值只能是字符串，另外它们 rehash 的方式不一样，因为 Java 的 HashMap 在字典很大时，rehash 是个耗时的操作，需要一次性全部 rehash。**Redis 为了高性能，不能堵塞服务，所以采用了渐进式 rehash 策略。**
+Redis 的字典的值只能是字符串，另外它们 rehash 的方式不一样，因为 Java 的 HashMap 在字典很大时，rehash 是个耗时的操作，需要一次性全部 rehash。**Redis 为了高性能，不能堵塞服务，所以采用了渐进式 rehash 策略**。
 ![image](https://mail.wangkekai.cn/C5E5EF39-9A78-4D29-A1F7-C3983C4F4A58.png)
 
 渐进式 rehash 会在 rehash 的同时，保留新旧两个 hash 结构，查询时会同时查询两个 hash 结构，然后在后续的定时任务中以及 hash 操作指令中，循序渐进地将旧 hash 的内容一点点迁移到新的 hash 结构中。当搬迁完成了，就会使用新的 hash 结构取而代之。
@@ -327,7 +327,7 @@ hash 结构也可以用来存储用户信息，不同于字符串一次性需要
 
 > hash 也有缺点，hash 结构的存储消耗要高于单个字符串，到底该使用 hash 还是字符串，需要根据实际情况再三权衡。
 
-```redis
+```shell
 > hset books java "think in java"  # 命令行的字符串如果包含空格，要用引号括起来
 (integer) 1
 // ...
@@ -356,7 +356,7 @@ OK
 ### dict - 内部结构
 
 dict 是 Redis 服务器中出现最为频繁的复合型数据结构，除了 hash 结构的数据会用到字典外，**整个 Redis 数据库的所有 key 和 value 也组成了一个全局字典**，还有带过期时间的 key 集合也是一个字典。  
-**zset 集合中存储 value 和 score 值的映射关系也是通过 dict 结构实现的。**
+**zset 集合中存储 value 和 score 值的映射关系也是通过 dict 结构实现的**。
 
 ```c++
 struct RedisDb {
@@ -409,7 +409,7 @@ hashtable 的性能好不好完全取决于 hash 函数的质量。hash 函数�
 ### 缩容条件
 
 当 hash 表因为元素的逐渐删除变得越来越稀疏时，Redis 会对 hash 表进行缩容来减少 hash 表的第一维数组空间占用。  
-**缩容的条件是元素个数低于数组长度的 10%。缩容不会考虑 Redis 是否正在做 bgsave。**
+**缩容的条件是元素个数低于数组长度的 10%。缩容不会考虑 Redis 是否正在做 bgsave**。
 
 ### set 的结构
 
@@ -422,7 +422,7 @@ Redis 的集合相当于 Java 语言里面的 HashSet，**它内部的键值对�
 
 set 结构可以用来存储活动中奖的用户 ID，因为有去重功能，可以保证同一个用户不会中奖两次。
 
-```redis
+```shell
 > sadd books python
 (integer) 1
 > sadd books python  #  重复
@@ -449,7 +449,7 @@ set 结构可以用来存储活动中奖的用户 ID，因为有去重功能，�
 
 zset 可以用来存粉丝列表或学生的成绩，value 值是粉丝的用户/学生 ID，score 是关注时间/成绩。我们可以对粉丝列表按关注时间/成绩进行排序。
 
-```redis
+```shell
 > zadd books 9.0 "think in java"
 (integer) 1
 // ...
@@ -550,7 +550,7 @@ struct zslnode {
 
 > Redis 2.8 版本中作者加入了 set 指令的扩展参数，使得 `setnx` 和 `expire` 指令可以一起执行，彻底解决了分布式锁的乱象。
 
-```redis
+```shell
 > setnx lock:codehole true // 这里的冒号:就是一个普通的字符，没特别含义，它可以是任意其它字符，不要误解
 OK
 ... do something critical ...
@@ -579,7 +579,7 @@ OK
 Redis 的 list(列表) 数据结构常用来作为异步消息队列使用，使用 rpush/lpush 操作入队列，使用 lpop 和 rpop 来出队列。
 ![image](https://mail.wangkekai.cn/1607610238093.jpg)
 
-```redis
+```shell
 > rpush notify-queue apple banana pear
 (integer) 3
 > llen notify-queue
@@ -605,7 +605,7 @@ Redis 的 list(列表) 数据结构常用来作为异步消息队列使用，使
 
 ### 空闲连接自动断开
 
-如果线程一直阻塞在哪里，Redis 的客户端连接就成了闲置连接，闲置过久，服务器一般会主动断开连接，减少闲置资源占用。这个时候 blpop/brpop 会抛出异常来。 **注意捕获异常，还要重试。**
+如果线程一直阻塞在哪里，Redis 的客户端连接就成了闲置连接，闲置过久，服务器一般会主动断开连接，减少闲置资源占用。这个时候 blpop/brpop 会抛出异常来。 **注意捕获异常，还要重试**。
 
 *延时队列可以通过 Redis 的 zset(有序列表) 来实现*。  
 **我们将消息序列化成一个字符串作为 zset 的 value，这个消息的到期处理时间作为 score，然后用多个线程轮询 zset 获取到期的任务进行处理，多个线程是为了保障可用性，万一挂了一个线程还有其它线程可以继续处理**。  
@@ -654,7 +654,7 @@ HyperLogLog 数据结构是 Redis 的高级数据结构，它非常有用，但�
 
 HyperLogLog 提供了两个指令 `pfadd` 和 `pfcount`，根据字面意义很好理解，**一个是增加计数，一个是获取计数**。
 
-```redis
+```shell
 127.0.0.1:6379> pfadd codehole user1
 (integer) 1
 127.0.0.1:6379> pfcount codehole
@@ -746,7 +746,7 @@ HyperLogLog 通过分配 16384 个桶，然后对所有的桶的最大数量 K �
 
 假设桶的编号为idx，这个 6bit 计数值的起始字节位置偏移用 offset_bytes 表示，它在这个字节的起始比特位置偏移用 offset_bits 表示。我们有
 
-```redis
+```shell
 offset_bytes = (idx * 6) / 8
 offset_bits = (idx * 6) % 8
 ```
@@ -784,7 +784,7 @@ val = (high_val << low_bits | low_val) & 0b111111
 
 ![image](https://user-gold-cdn.xitu.io/2018/8/31/1658e631c1730628?imageView2/0/w/1280/h/960/ignore-error/1)
 
-**当多个连续桶的计数值都是零时，Redis 使用了一个字节来表示接下来有多少个桶的计数值都是零：00xxxxxx。**前缀两个零表示接下来的 6bit 整数值加 1 就是零值计数器的数量，注意这里要加 1 是因为数量如果为零是没有意义的。比如 00010101 表示连续 22 个零值计数器。6bit 最多只能表示连续 64 个零值计数器，所以 Redis 又设计了连续多个多于 64 个的连续零值计数器，它使用两个字节来表示：01xxxxxx yyyyyyyy，后面的 14bit 可以表示最多连续 16384 个零值计数器。这意味着 HyperLogLog 数据结构中 16384 个桶的初始状态，所有的计数器都是零值，可以直接使用 2 个字节来表示。
+**当多个连续桶的计数值都是零时，Redis 使用了一个字节来表示接下来有多少个桶的计数值都是零：00xxxxxx**。前缀两个零表示接下来的 6bit 整数值加 1 就是零值计数器的数量，注意这里要加 1 是因为数量如果为零是没有意义的。比如 00010101 表示连续 22 个零值计数器。6bit 最多只能表示连续 64 个零值计数器，所以 Redis 又设计了连续多个多于 64 个的连续零值计数器，它使用两个字节来表示：01xxxxxx yyyyyyyy，后面的 14bit 可以表示最多连续 16384 个零值计数器。这意味着 HyperLogLog 数据结构中 16384 个桶的初始状态，所有的计数器都是零值，可以直接使用 2 个字节来表示。
 
 如果连续几个桶的计数值非零，那就使用形如 1vvvvvxx 这样的一个字节来表示。中间 5bit 表示计数值，尾部 2bit 表示连续几个桶。它的意思是连续 （xx +1） 个计数值都是 （vvvvv + 1）。比如 10101011 表示连续 4 个计数值都是 11。注意这两个值都需要加 1，因为任意一个是零都意味着这个计数值为零，那就应该使用零计数值的形式来表示。注意计数值最大只能表示到32，而 HyperLogLog 的密集存储单个计数值用 6bit 表示，最大可以表示到 63。当稀疏存储的某个计数值需要调整到大于 32 时，Redis 就会立即转换 HyperLogLog 的存储结构，将稀疏存储转换成密集存储。
 
@@ -832,7 +832,7 @@ struct hllhdr {
 
 所以 HyperLogLog 整体的内部结构就是 HLL 对象头 加上 16384 个桶的计数值位图。它在 Redis 的内部结构表现就是一个字符串位图。你可以把 HyperLogLog 对象当成普通的字符串来进行处理。
 
-```redis
+```shell
 127.0.0.1:6379> pfadd codehole python java golang
 (integer) 1
 127.0.0.1:6379> get codehole
@@ -888,13 +888,13 @@ HyperLogLog 和 字符串的关系就好比 Geo 和 zset 的关系。你也可�
 ## 10. 布隆过滤器
 
 布隆过滤器可以理解为一个不怎么精确的 set 结构，当你使用它的 contains 方法判断某个对象是否存在时，它可能会误判。但是布隆过滤器也不是特别不精确，只要参数设置的合理，它的精确度可以控制的相对足够精确，只会有小小的误判概率。  
-**当布隆过滤器说某个值存在时，这个值可能不存在；当它说不存在时，那就肯定不存在。**
+**当布隆过滤器说某个值存在时，这个值可能不存在；当它说不存在时，那就肯定不存在**。
 
 ### 布隆过滤器基本使用
 
 布隆过滤器有二个基本指令，bf.add 添加元素，bf.exists 查询元素是否存在，它的用法和 set 集合的 sadd 和 sismember 差不多。注意 bf.add 只能一次添加一个元素，如果想要一次添加多个，就需要用到 bf.madd 指令。同样如果需要一次查询多个元素是否存在，就需要用到 bf.mexists 指令。
 
-```redis
+```shell
 127.0.0.1:6379> bf.add codehole user1
 (integer) 1
 // ...
@@ -952,7 +952,7 @@ for i in range(20):
 
 Redis 4.0 提供了一个限流 Redis 模块，它叫 redis-cell。该模块也使用了漏斗算法，并提供了原子的限流指令。有了这个模块，限流问题就非常简单了。
 
-```redis
+```shell
 > cl.throttle laoqian:reply 15 30 60 1
                       ▲     ▲  ▲  ▲  ▲
                       |     |  |  |  └───── need 1 quota (可选参数，默认值也是1)
@@ -963,7 +963,7 @@ Redis 4.0 提供了一个限流 Redis 模块，它叫 redis-cell。该模块也�
 
 上面这个指令的意思是允许「用户老钱回复行为」的频率为每 60s 最多 30 次(漏水速率)，漏斗的初始容量为 15，也就是说一开始可以连续回复 15 个帖子，然后才开始受漏水速率的影响。我们看到这个指令中漏水速率变成了 2 个参数，替代了之前的单个浮点数。用两个参数相除的结果来表达漏水速率相对单个浮点数要更加直观一些。
 
-```redis
+```shell
 > cl.throttle laoqian:reply 15 30 60
 1) (integer) 0   # 0 表示允许，1表示拒绝
 2) (integer) 15  # 漏斗容量capacity
@@ -986,7 +986,7 @@ GeoHash 算法将二维的经纬度数据映射到一维的整数，这样所有
 
 geoadd 指令携带集合名称以及多个经纬度名称三元组，注意这里可以加入多个三元组。
 
-```redis
+```shell
 127.0.0.1:6379> geoadd company 116.48105 39.996794 juejin
 (integer) 1
 // ...
@@ -1000,7 +1000,7 @@ geoadd 指令携带集合名称以及多个经纬度名称三元组，注意这�
 
 geodist 指令可以用来计算两个元素之间的距离，携带集合名称、2 个名称和距离单位。
 
-```redis
+```shell
 127.0.0.1:6379> geodist company juejin ireader km
 "10.5501"
 // ...
@@ -1012,7 +1012,7 @@ geodist 指令可以用来计算两个元素之间的距离，携带集合名称
 
 geopos 指令可以获取集合中任意元素的经纬度坐标，可以一次获取多个。
 
-```redis
+```shell
 127.0.0.1:6379> geopos company juejin
 1) 1) "116.48104995489120483"
    2) "39.99679348858259686"
@@ -1028,7 +1028,7 @@ geopos 指令可以获取集合中任意元素的经纬度坐标，可以一次�
 
 geohash 可以获取元素的经纬度编码字符串，上面已经提到，它是 base32 编码。你可以使用这个编码值去 geohash.org/${hash} 中进行直… geohash 的标准编码值。
 
-```redis
+```shell
 127.0.0.1:6379> geohash company ireader
 1) "wx4g52e1ce0"
 127.0.0.1:6379> geohash company juejin
@@ -1039,7 +1039,7 @@ geohash 可以获取元素的经纬度编码字符串，上面已经提到，它
 
 georadiusbymember 指令是最为关键的指令，它可以用来查询指定元素附近的其它元素，它的参数非常复杂。
 
-```redis
+```shell
 # 范围 20 公里以内最多 3 个元素按距离正排，它不会排除自身
 127.0.0.1:6379> georadiusbymember company ireader 20 km count 3 asc
 1) "ireader"
@@ -1072,7 +1072,7 @@ georadiusbymember 指令是最为关键的指令，它可以用来查询指定�
 
 除了 `georadiusbymember` 指令根据元素查询附近的元素，Redis 还提供了根据坐标值来查询附近的元素，这个指令更加有用，它可以根据用户的定位来计算「附近的车」，「附近的餐馆」等。它的参数和 georadiusbymember 基本一致，除了将目标元素改成经纬度坐标值。
 
-```redis
+```shell
 127.0.0.1:6379> georadius company 116.514202 39.905409 20 km withdist count 3 asc
 1) 1) "ireader"
    2) "0.0000"
@@ -1107,7 +1107,7 @@ keys 用来列出所有满足特定正则字符串规则的 key。
 
 scan 参数提供了三个参数，第一个是 cursor 整数值，第二个是 key 的正则模式，第三个是遍历的 limit hint。第一次遍历时，cursor 值为 0，然后将返回结果中第一个整数值作为下一次遍历的 cursor。一直遍历到返回的 cursor 值为 0 时结束。
 
-```redis
+```shell
 127.0.0.1:6379> scan 0 match key99* count 1000
 1) "13976"
 2)  1) "key9911"
@@ -1132,7 +1132,7 @@ scan 参数提供了三个参数，第一个是 cursor 整数值，第二个是 
 
 从上面的过程可以看到虽然提供的 limit 是 1000，但是返回的结果只有 10 个左右。**因为这个 limit 不是限定返回结果的数量，而是限定服务器单次遍历的字典槽位数量(约等于)**。如果将 limit 设置为 10，你会发现返回结果是空的，*但是游标值不为零，意味着遍历还没结束*。
 
-```redis
+```shell
 127.0.0.1:6379> scan 0 match key99* count 10
 1) "3072"
 2) (empty list or set)
@@ -1176,13 +1176,13 @@ scan 指令是一系列指令，除了可以遍历所有的 key 之外，还可�
 
 上面这样的过程需要编写脚本，比较繁琐，不过 Redis 官方已经在 redis-cli 指令中提供了这样的扫描功能，我们可以直接拿来即用。
 
-```redis
+```shell
 redis-cli -h 127.0.0.1 -p 7001 –-bigkeys
 ```
 
 如果你担心这个指令会大幅抬升 Redis 的 ops 导致线上报警，还可以增加一个休眠参数。
 
-```redis
+```shell
 redis-cli -h 127.0.0.1 -p 7001 –-bigkeys -i 0.1
 ```
 
@@ -1256,7 +1256,7 @@ Redis 使用操作系统的多进程 COW(Copy On Write) 机制来实现快照持
 
 Redis 在持久化时会调用 glibc 的函数 fork 产生一个子进程，快照持久化完全交给子进程来处理，父进程继续处理客户端请求。子进程刚刚产生时，它和父进程共享内存里面的代码段和数据段。这时你可以将父子进程想像成一个连体婴儿，共享身体。这是 Linux 操作系统的机制，为了节约内存资源，所以尽可能让它们共享起来。在进程分离的一瞬间，内存的增长几乎没有明显变化。
 
-**子进程做数据持久化，它不会修改现有的内存数据结构，它只是对数据结构进行遍历读取，然后序列化写到磁盘中。但是父进程不一样，它必须持续服务客户端请求，然后对内存数据结构进行不间断的修改。**
+**子进程做数据持久化，它不会修改现有的内存数据结构，它只是对数据结构进行遍历读取，然后序列化写到磁盘中。但是父进程不一样，它必须持续服务客户端请求，然后对内存数据结构进行不间断的修改**。
 
 随着父进程修改操作的持续进行，越来越多的共享页面被分离出来，内存就会持续增长。但是也不会超过原有数据内存的 2 倍大小。**另外一个 Redis 实例里冷数据占的比例往往是比较高的，所以很少会出现所有的页面都会被分离，被分离的往往只有其中一部分页面。*每个页面的大小只有 4K，一个 Redis 实例里面一般都会有成千上万的页面。***。
 
@@ -1327,7 +1327,7 @@ Redis 同样也提供了另外两种策略，**一个是永不 fsync——让操
 
 multi/exec/discard。multi 指示事务的开始，exec 指示事务的执行，discard 指示事务的丢弃。
 
-```redis
+```shell
 > multi
 OK
 > incr books
@@ -1343,7 +1343,7 @@ QUEUED
 
 ### 原子性
 
-```redis
+```shell
 // 特别的例子
 > multi
 OK
@@ -1371,7 +1371,7 @@ QUEUED
 
 上面的 Redis 事务在发送每个指令到事务缓存队列时都要经过一次网络读写，当一个事务内部的指令较多时，需要的网络 IO 时间也会线性增长。所以通常 Redis 的客户端在执行事务时都会结合 pipeline 一起使用，这样可以将多次 IO 操作压缩为单次 IO 操作。
 
-```redis
+```shell
 pipe = redis.pipeline(transaction=true)
 pipe.multi()
 pipe.incr("books")
@@ -1385,7 +1385,7 @@ values = pipe.execute()
 
 Redis 提供了这种 watch 的机制，它就是一种乐观锁。有了 watch 我们又多了一种可以用来解决并发修改的方法。watch 的使用方式如下：
 
-```redis
+```shell
 while True:
     do_watch()
     commands()
@@ -1435,7 +1435,7 @@ Redis PubSub 的生产者和消费者是不同的连接，也就是上面这个�
 
 简化订阅的繁琐，redis 提供了模式订阅功能 Pattern Subscribe，这样就可以一次订阅多个主题，即使生产者新增加了同模式的主题，消费者也可以立即收到消息。
 
-```redis
+```shell
 > psubscribe codehole.*  # 用模式匹配一次订阅多个主题，主题以 codehole. 字符开头的消息都可以收到
 1) "psubscribe"
 2) "codehole.*"
@@ -1538,7 +1538,7 @@ wait 提供两个参数，*第一个参数是从库的数量 N，第二个参数
 
 Redis 主从采用异步复制，意味着当主节点挂掉时，从节点可能没有收到全部的同步消息，这部分未同步的消息就丢失了。如果主从延迟特别大，那么丢失的数据就可能会特别多。sentinel 无法保证消息完全不丢失，但是也尽可能保证消息少丢失。它有两个选项可以限制主从延迟过大。
 
-```redis
+```shell
 min-slaves-to-write 1
 min-slaves-max-lag 10
 ```
@@ -1569,7 +1569,7 @@ Cluster 还允许用户强制某个 key 挂在特定槽位上，通过在 key �
 
 当客户端向一个错误的节点发出了指令，该节点会发现指令的 key 所在的槽位并不归自己管理，这时它会向客户端发送一个特殊的跳转指令携带目标操作的节点地址，告诉客户端去连这个节点去获取数据。
 
-```redis
+```shell
 GET x
 -MOVED 3999 127.0.0.1:6381
 ```
@@ -1585,11 +1585,11 @@ Redis 迁移的单位是槽，Redis 一个槽一个槽进行迁移，当一个�
 
 迁移工具 redis-trib 首先会在源和目标节点设置好中间过渡状态，然后一次性获取源节点槽位的所有 key 列表(keysinslot 指令，可以部分获取)，再挨个 key 进行迁移。每个 key 的迁移过程是以原节点作为目标节点的「客户端」，原节点对当前的 key 执行 dump 指令得到序列化内容，然后通过「客户端」向目标节点发送指令 restore 携带序列化的内容作为参数，目标节点再进行反序列化就可以将内容恢复到目标节点的内存中，然后返回「客户端」OK，原节点「客户端」收到后再把当前节点的 key 删除掉就完成了单个 key 迁移的整个过程。
 
-**从源节点获取内容 => 存到目标节点 => 从源节点删除内容。**
+**从源节点获取内容 => 存到目标节点 => 从源节点删除内容**。
 
 注意这里的迁移过程是同步的，在目标节点执行 restore 指令到原节点删除 key 之间，原节点的主线程会处于阻塞状态，直到 key 被成功删除。  
 如果迁移过程中突然出现网络故障，整个 slot 的迁移只进行了一半。这时两个节点依旧处于中间过渡状态。待下次迁移工具重新连上时，会提示用户继续进行迁移。  
-在迁移过程中，如果每个 key 的内容都很小，migrate 指令执行会很快，它就并不会影响客户端的正常访问。如果 key 的内容很大，因为 migrate 指令是阻塞指令会同时导致原节点和目标节点卡顿，影响集群的稳定型。**所以在集群环境下业务逻辑要尽可能避免大 key 的产生。**
+在迁移过程中，如果每个 key 的内容都很小，migrate 指令执行会很快，它就并不会影响客户端的正常访问。如果 key 的内容很大，因为 migrate 指令是阻塞指令会同时导致原节点和目标节点卡顿，影响集群的稳定型。**所以在集群环境下业务逻辑要尽可能避免大 key 的产生**。
 
 在迁移过程中，客户端访问的流程会有很大的变化。
 
@@ -1621,7 +1621,7 @@ Redis 集群节点采用 Gossip 协议来广播自己的状态以及自己对整
 
 客户端保存了槽位和节点的映射关系表，它需要即时得到更新，client 才可以正常地将某条指令发到正确的节点中。
 
-**Cluster 有两个特殊的 error 指令，一个是 moved，一个是 asking。**
+**Cluster 有两个特殊的 error 指令，一个是 moved，一个是 asking**。
 
 第一个 moved 是用来纠正槽位的。如果我们将指令发送到了错误的节点，该节点发现对应的指令槽位不归自己管理，就会将目标节点的地址随同 moved 指令回复给客户端通知客户端去目标节点去访问。这个时候客户端就会刷新自己的槽位关系表，然后重试指令，后续所有打在该槽位的指令都会转到目标节点。
 
@@ -1672,7 +1672,7 @@ Redis Stream 的结构如上图所示，它有一个消息链表，将所有加�
 4. xlen 消息长度
 5. del 删除 Stream
 
-```redis
+```shell
 # * 号表示服务器自动生成 ID，后面顺序跟着一堆 key/value
 #  名字叫 laoqian，年龄 30 岁
 127.0.0.1:6379> xadd codehole * name laoqian age 30  
@@ -1786,7 +1786,7 @@ Redis Stream 的结构如上图所示，它有一个消息链表，将所有加�
 
 block 0 表示永远阻塞，直到消息到来，block 1000 表示阻塞 1s，如果 1s 内没有任何消息到来，就返回 nil。
 
-```redis
+```shell
 127.0.0.1:6379> xread block 1000 count 1 streams codehole $
 (nil)
 (1.07s)
@@ -1798,7 +1798,7 @@ block 0 表示永远阻塞，直到消息到来，block 1000 表示阻塞 1s，�
 
 Stream 通过 `xgroup create` 指令创建消费组 (Consumer Group)，需要传递起始消息 ID 参数用来初始化 last_delivered_id 变量。
 
-```redis
+```shell
 #  表示从头开始消费
 127.0.0.1:6379> xgroup create codehole cg1 0-0
 OK
@@ -1847,7 +1847,7 @@ OK
 
 Stream 提供了 xreadgroup 指令可以进行消费组的组内消费，需要提供消费组名称、消费者名称和起始消息 ID。它同 xread 一样，也可以阻塞等待新消息。读到新消息后，对应的消息 ID 就会进入消费者的 PEL(正在处理的消息) 结构里，客户端处理完毕后使用 xack 指令通知服务器，本条消息已经处理完毕，该消息 ID 就会从 PEL 中移除。
 
-```redis
+```shell
 # > 号表示从当前消费组的 last_delivered_id 后面开始读
 # 每当消费者读取一条消息，last_delivered_id 变量就会前进
 127.0.0.1:6379> xreadgroup GROUP cg1 c1 count 1 streams codehole >
@@ -1941,7 +1941,7 @@ Stream 提供了 xreadgroup 指令可以进行消费组的组内消费，需要�
 
 它提供了一个定长 Stream 功能。在 xadd 的指令提供一个定长长度 maxlen，就可以将老的消息干掉，确保最多不超过指定长度。
 
-```redis
+```shell
 127.0.0.1:6379> xlen codehole
 (integer) 5
 127.0.0.1:6379> xadd codehole maxlen 3 * name xiaorui age 1
@@ -1982,7 +1982,7 @@ Info 指令显示的信息非常繁多，分为 9 大块，每个块都有非常
 
 Info 可以一次性获取所有的信息，也可以按块取信息。
 
-```redis
+```shell
 # 获取所有信息
 > info
 # 获取内存相关信息
@@ -1993,7 +1993,7 @@ Info 可以一次性获取所有的信息，也可以按块取信息。
 
 ### Redis 每秒执行多少次指令？
 
-```redis
+```shell
 # ops_per_sec: operations per second，也就是每秒操作数
 > redis-cli info stats |grep ops
 instantaneous_ops_per_sec:789
@@ -2003,7 +2003,7 @@ instantaneous_ops_per_sec:789
 
 ### Redis 连接了多少客户端？
 
-```redis
+```shell
 > redis-cli info clients
 # Clients
 connected_clients:124  # 这个就是正在连接的客户端数量
@@ -2016,14 +2016,14 @@ blocked_clients:0
 
 关于客户端的数量还有个重要的参数需要观察，那就是 rejected_connections，它表示因为超出最大连接数限制而被拒绝的客户端连接次数，如果这个数字很大，意味着服务器的最大连接数设置的过低需要调整 maxclients 参数。
 
-```redis
+```shell
 > redis-cli info stats |grep reject
 rejected_connections:0
 ```
 
 ### Redis 内存占用多大 ?
 
-```redis
+```shell
 > redis-cli info memory | grep used | grep human
 used_memory_human:827.46K # 内存分配器 (jemalloc) 从操作系统分配的内存总量
 used_memory_rss_human:3.61M  # 操作系统看到的内存占用 ,top 命令看到的内存
@@ -2033,7 +2033,7 @@ used_memory_lua_human:37.00K # lua 脚本引擎占用的内存大小
 
 ### 复制积压缓冲区多大？
 
-```redis
+```shell
 > redis-cli info replication |grep backlog
 repl_backlog_active:0
 repl_backlog_size:1048576  # 这个就是积压缓冲区大小
@@ -2047,14 +2047,14 @@ repl_backlog_histlen:0
 
 如果有多个从库复制，积压缓冲区是共享的，它不会因为从库过多而线性增长。如果实例的修改指令请求很频繁，那就把积压缓冲区调大一些，几十个 M 大小差不多了，如果很闲，那就设置为几个 M。
 
-```redis
+```shell
 > redis-cli info stats | grep sync
 sync_full:0
 sync_partial_ok:0
 sync_partial_err:0  # 半同步失败次数
 ```
 
-**通过查看 sync_partial_err 变量的次数来决定是否需要扩大积压缓冲区，它表示主从半同步复制失败的次数。**
+**通过查看 sync_partial_err 变量的次数来决定是否需要扩大积压缓冲区，它表示主从半同步复制失败的次数**。
 
 ## 27. 优胜劣汰 —— LRU
 
@@ -2131,9 +2131,9 @@ Redis 使用的是一种近似 LRU 算法，它跟 LRU 算法还不太一样。�
 
 删除指令 del 会直接释放对象的内存，大部分情况下，这个指令非常快，没有明显延迟。不过如果删除的 key 是一个非常大的对象，比如一个包含了千万元素的 hash，那么删除操作就会导致单线程卡顿。
 
-Redis 为了解决这个卡顿问题，在 4.0 版本引入了 unlink 指令，**它能对删除操作进行懒处理，丢给后台线程来异步回收内存。**
+Redis 为了解决这个卡顿问题，在 4.0 版本引入了 `unlink` 指令，**它能对删除操作进行懒处理，丢给后台线程来异步回收内存**。
 
-```redis
+```shell
 > unlink key
 OK
 ```
@@ -2145,7 +2145,7 @@ OK
 
 Redis 提供了 flushdb 和 flushall 指令，用来清空数据库，这也是极其缓慢的操作。Redis 4.0 同样给这两个指令也带来了异步化，在指令后面增加 async 参数就可以将整棵大树连根拔起，扔给后台线程慢慢焚烧。
 
-```redis
+```shell
 > flushall async
 OK
 ```
@@ -2159,7 +2159,7 @@ OK
 
 ### AOF Sync也很慢
 
-Redis需要每秒一次(可配置)同步AOF日志到磁盘，确保消息尽量不丢失，需要调用sync函数，这个操作会比较耗时，会导致主线程的效率下降，所以Redis也将这个操作移到异步线程来完成。执行AOF Sync操作的线程是一个独立的异步线程，和前面的懒惰删除线程不是一个线程，同样它也有一个属于自己的任务队列，队列里只用来存放AOF Sync任务。
+*Redis需要每秒一次(可配置)同步 AOF 日志到磁盘，确保消息尽量不丢失*，需要调用 sync 函数，这个操作会比较耗时，会导致主线程的效率下降，所以 Redis 也将这个操作移到异步线程来完成。执行 AOF Sync 操作的线程是一个独立的异步线程，和前面的懒惰删除线程不是一个线程，同样它也有一个属于自己的任务队列，队列里只用来存放 AOF Sync 任务。
 
 ### 更多异步删除点
 
@@ -2176,17 +2176,17 @@ Redis4.0 为这些删除点也带来了异步删除机制，打开这些点需�
 
 ### 指令安全
 
-Redis 有一些非常危险的指令，这些指令会对 Redis 的稳定以及数据安全造成非常严重的影响。<font color=red>比如 keys 指令会导致 Redis 卡顿，flushdb 和 flushall 会让 Redis 的所有数据全部清空。</font>如何避免人为操作失误导致这些灾难性的后果也是运维人员特别需要注意的风险点之一。
+Redis 有一些非常危险的指令，这些指令会对 Redis 的稳定以及数据安全造成非常严重的影响。**比如 keys 指令会导致 Redis 卡顿，flushdb 和 flushall 会让 Redis 的所有数据全部清空**。如何避免人为操作失误导致这些灾难性的后果也是运维人员特别需要注意的风险点之一。
 
-Redis 在配置文件中提供了 rename-command 指令用于将某些危险的指令修改成特别的名称，用来避免人为误操作。比如在配置文件的 security 块增加下面的内容:
+Redis 在配置文件中提供了 `rename-command` 指令用于将某些危险的指令修改成特别的名称，用来避免人为误操作。比如在配置文件的 security 块增加下面的内容:
 
-```redis
+```shell
 rename-command keys abckeysabc
 ```
 
 如果还想执行 keys 方法，那就不能直接敲 keys 命令了，而需要键入 abckeysabc。 如果想完全封杀某条指令，可以将指令 rename 成空串，就无法通过任何字符串指令来执行这条指令了。
 
-```redis
+```shell
 rename-command flushall ""
 ```
 
@@ -2194,19 +2194,19 @@ rename-command flushall ""
 
 Redis 默认会监听 *:6379，如果当前的服务器主机有外网地址，Redis 的服务将会直接暴露在公网上，任何一个初级黑客使用适当的工具对 IP 地址进行端口扫描就可以探测出来。
 
-```redis
+```shell
 bind 10.100.20.13
 ```
 
-<font color=red>运维人员务必在 Redis 的配置文件中指定监听的 IP 地址，避免这样的惨剧发生。</font>更进一步，还可以增加 Redis 的密码访问限制，客户端必须使用 auth 指令传入正确的密码才可以访问 Redis，这样即使地址暴露出去了，普通黑客也无法对 Redis 进行任何指令操作。
+**运维人员务必在 Redis 的配置文件中指定监听的 IP 地址，避免这样的惨剧发生**。更进一步，还可以增加 Redis 的密码访问限制，客户端必须使用 auth 指令传入正确的密码才可以访问 Redis，这样即使地址暴露出去了，普通黑客也无法对 Redis 进行任何指令操作。
 
-```redis
+```shell
 requirepass yoursecurepasswordhereplease
 ```
 
 密码控制也会影响到从库复制，从库必须在配置文件里使用 masterauth 指令配置相应的密码才可以进行复制操作。
 
-```redis
+```shell
 masterauth yoursecurepasswordhereplease
 ```
 
@@ -2243,48 +2243,48 @@ spiped 进程需要成对出现，相互之间需要使用相同的共享密钥�
 
 1. 使用 Docker 启动 redis-server，注意要绑定本机的回环127.0.0.1；
 
-```shell
-> docker run -d -p127.0.0.1:6379:6379 --name redis-server-6379 redis
-12781661ec47faa8a8a967234365192f4da58070b791262afb8d9f64fce61835
-> docker ps
-CONTAINER ID        IMAGE               COMMAND                  CREATED                  STATUS              PORTS                      NAMES
-12781661ec47        redis               "docker-entrypoint.s…"   Less than a second ago   Up 1 second         127.0.0.1:6379->6379/tcp   redis-server-6379
-```
+    ```shell
+    > docker run -d -p127.0.0.1:6379:6379 --name redis-server-6379 redis
+    12781661ec47faa8a8a967234365192f4da58070b791262afb8d9f64fce61835
+    > docker ps
+    CONTAINER ID        IMAGE               COMMAND                  CREATED                  STATUS              PORTS                      NAMES
+    12781661ec47        redis               "docker-entrypoint.s…"   Less than a second ago   Up 1 second         127.0.0.1:6379->6379/tcp   redis-server-6379
+    ```
 
 2. 生成随机的密钥文件
 
-```shell
-# 随机的 32 个字节
-> dd if=/dev/urandom bs=32 count=1 of=spiped.key
-1+0 records in
-1+0 records out
-32 bytes transferred in 0.000079 secs (405492 bytes/sec)
-> ls -l
-rw-r--r--  1 qianwp  staff  32  7 24 18:13 spiped.key
-```
+    ```shell
+    # 随机的 32 个字节
+    > dd if=/dev/urandom bs=32 count=1 of=spiped.key
+    1+0 records in
+    1+0 records out
+    32 bytes transferred in 0.000079 secs (405492 bytes/sec)
+    > ls -l
+    rw-r--r--  1 qianwp  staff  32  7 24 18:13 spiped.key
+    ```
 
 3. 使用密钥文件启动服务器 spiped 进程，172.16.128.81是我本机的公网 IP 地址；
 
-```shell
-# -d 表示 decrypt(对输入数据进行解密)，-s 为源监听地址，-t 为转发目标地址
-> spiped -d -s '[172.16.128.81]:6479' -t '[127.0.0.1]:6379' -k spiped.key
-> ps -ef|grep spiped
-501 30673     1   0  7:29 下午 ??         0:00.04 spiped -d -s [172.16.128.81]:6479 -t [127.0.0.1]:6379 -k spiped.key
-```
+    ```shell
+    # -d 表示 decrypt(对输入数据进行解密)，-s 为源监听地址，-t 为转发目标地址
+    > spiped -d -s '[172.16.128.81]:6479' -t '[127.0.0.1]:6379' -k spiped.key
+    > ps -ef|grep spiped
+    501 30673     1   0  7:29 下午 ??         0:00.04 spiped -d -s [172.16.128.81]:6479 -t [127.0.0.1]:6379 -k spiped.key
+    ```
 
-这个 spiped 进程监听公网 IP 的 6479 端口接收公网上的数据，将数据解密后转发到本机回环地址的 6379 端口，也就是 redis-server 监听的端口。
+    这个 spiped 进程监听公网 IP 的 6479 端口接收公网上的数据，将数据解密后转发到本机回环地址的 6379 端口，也就是 redis-server 监听的端口。
 
 4. 使用密钥文件启动客户端 spiped 进程，172.16.128.81是我本机的公网 IP 地址
 
-```shell
-# -e 表示 encrypt，对输入数据进行加密
-> spiped -e -s '[127.0.0.1]:6579' -t '[172.16.128.81]:6479' -k spiped.key
-> ps -ef|grep spiped
-501 30673     1   0  7:29 下午 ??         0:00.04 spiped -d -s [172.16.128.81]:6479 -t [127.0.0.1]:6379 -k spiped.key
-501 30696     1   0  7:30 下午 ??         0:00.03 spiped -e -s [127.0.0.1]:6579 -t [172.16.128.81]:6479 -k spiped.key
-```
+    ```shell
+    # -e 表示 encrypt，对输入数据进行加密
+    > spiped -e -s '[127.0.0.1]:6579' -t '[172.16.128.81]:6479' -k spiped.key
+    > ps -ef|grep spiped
+    501 30673     1   0  7:29 下午 ??         0:00.04 spiped -d -s [172.16.128.81]:6479 -t [127.0.0.1]:6379 -k spiped.key
+    501 30696     1   0  7:30 下午 ??         0:00.03 spiped -e -s [127.0.0.1]:6579 -t [172.16.128.81]:6479 -k spiped.key
+    ```
 
-客户端 spiped 进程监听了本地回环地址的 6579 端口，将该端口上收到的数据加密转发到服务器 spiped 进程。
+    客户端 spiped 进程监听了本地回环地址的 6579 端口，将该端口上收到的数据加密转发到服务器 spiped 进程。
 
 5. 启动客户端链接，因为 Docker 里面的客户端不好访问宿主机的回环地址，所以 Redis 的客户端我们使用 Python 代码来启动；
 
@@ -2333,7 +2333,7 @@ spiped 可以同时支持多个客户端链接的数据转发工作，它还可�
 可以向服务器发送 lua 脚本来执行自定义动作，获取脚本的响应数据。Redis 服务器会单线程原子性执行 lua 脚本，保证 lua 脚本在处理的过程中不会被任意其它请求打断。
 ![image](https://mail.wangkekai.cn/2599F979-1B21-48AD-9266-C5052F336A97.png)
 
-比如在分布式锁小节，我们提到了 del_if_equals 伪指令，它可以将匹配 key 和删除 key 合并在一起原子性执行，Redis 原生没有提供这样功能的指令，它可以使用 lua 脚本来完成。
+比如在分布式锁小节，我们提到了 `del_if_equals` 伪指令，它可以将匹配 key 和删除 key 合并在一起原子性执行，Redis 原生没有提供这样功能的指令，它可以使用 lua 脚本来完成。
 
 ```lua
 if redis.call("get",KEYS[1]) == ARGV[1] then
@@ -2345,7 +2345,7 @@ end
 
 那上面这个脚本可以使用 EVAL 指令执行
 
-```redis
+```shell
 127.0.0.1:6379> set foo bar
 OK
 127.0.0.1:6379> eval 'if redis.call("get",KEYS[1]) == ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end' 1 foo bar
@@ -2356,19 +2356,19 @@ OK
 
 EVAL 指令的第一个参数是脚本内容字符串，上面的例子我们将 lua 脚本压缩成一行以单引号围起来是为了方便命令行执行。然后是 key 的数量以及每个 key 串，最后是一系列附加参数字符串。附加参数的数量不需要和 key 保持一致，可以完全没有附加参数。
 
-```redis
+```shell
 EVAL SCRIPT KEY_NUM KEY1 KEY2 ... KEYN ARG1 ARG2 ....
 ```
 
-上面的例子中只有 1 个 key，它就是 foo，紧接着 bar 是唯一的附加参数。在 lua 脚本中，数组下标是从 1 开始，所以通过 KEYS[1] 就可以得到 第一个 key，通过 ARGV[1] 就可以得到第一个附加参数。redis.call 函数可以让我们调用 Redis 的原生指令，上面的代码分别调用了 get 指令和 del 指令。return 返回的结果将会返回给客户端。
+上面的例子中只有 1 个 key，它就是 foo，紧接着 bar 是唯一的附加参数。在 lua 脚本中，数组下标是从 1 开始，所以通过 KEYS[1] 就可以得到第一个 key，通过 ARGV[1] 就可以得到第一个附加参数。redis.call 函数可以让我们调用 Redis 的原生指令，上面的代码分别调用了 get 指令和 del 指令。return 返回的结果将会返回给客户端。
 
 ### SCRIPT LOAD 和 EVALSHA 指令
 
-如果脚本的内容很长，而且客户端需要频繁执行，那么每次都需要传递冗长的脚本内容势必比较浪费网络流量。<u>所以 Redis 还提供了 SCRIPT LOAD 和 EVALSHA 指令来解决这个问题。</u>
+如果脚本的内容很长，而且客户端需要频繁执行，那么每次都需要传递冗长的脚本内容势必比较浪费网络流量。*所以 Redis 还提供了 `SCRIPT LOAD` 和 `EVALSHA` 指令来解决这个问题*。
 
 ![image](https://mail.wangkekai.cn/4D5FC590-6CE3-4F5D-A0AE-694E2E9B8D93.png)
 
-SCRIPT LOAD 指令用于将客户端提供的 lua 脚本传递到服务器而不执行，但是会得到脚本的唯一 ID，这个唯一 ID 是用来唯一标识服务器缓存的这段 lua 脚本，它是由 Redis 使用 sha1 算法揉捏脚本内容而得到的一个很长的字符串。有了这个唯一 ID，后面客户端就可以通过 EVALSHA 指令反复执行这个脚本了。 我们知道 Redis 有 incrby 指令可以完成整数的自增操作，但是没有提供自乘这样的指令。
+SCRIPT LOAD 指令用于将客户端提供的 lua 脚本传递到服务器而不执行，但是会得到脚本的唯一 ID，这个唯一 ID 是用来唯一标识服务器缓存的这段 lua 脚本，它是由 Redis 使用 sha1 算法揉捏脚本内容而得到的一个很长的字符串。有了这个唯一 ID，后面客户端就可以通过 EVALSHA 指令反复执行这个脚本了。我们知道 Redis 有 incrby 指令可以完成整数的自增操作，但是没有提供自乘这样的指令。
 
 ```shell
 incrby key value  ==> $key = $key + value
@@ -2394,14 +2394,14 @@ local curVal = redis.call("get", KEYS[1]); if curVal == false then curVal = 0 el
 
 加载脚本
 
-```redis
+```shell
 127.0.0.1:6379> script load 'local curVal = redis.call("get", KEYS[1]); if curVal == false then curVal = 0 else curVal = tonumber(curVal) end; curVal = curVal * tonumber(ARGV[1]); redis.call("set", KEYS[1], curVal); return curVal'
 "be4f93d8a5379e5e5b768a74e77c8a4eb0434441"
 ```
 
 命令行输出了很长的字符串，它就是脚本的唯一标识，下面我们使用这个唯一标识来执行指令
 
-```redis
+```shell
 127.0.0.1:6379> evalsha be4f93d8a5379e5e5b768a74e77c8a4eb0434441 1 notexistskey 5
 (integer) 0
 127.0.0.1:6379> evalsha be4f93d8a5379e5e5b768a74e77c8a4eb0434441 1 notexistskey 5
@@ -2418,7 +2418,7 @@ OK
 
 上面的脚本参数要求传入的附加参数必须是整数，如果没有传递整数会怎样呢？
 
-```redis
+```shell
 127.0.0.1:6379> evalsha be4f93d8a5379e5e5b768a74e77c8a4eb0434441 1 foo bar
 (error) ERR Error running script (call to f_be4f93d8a5379e5e5b768a74e77c8a4eb0434441): @user_script:1: user_script:1: attempt to perform arithmetic on a nil value
 ```
@@ -2435,31 +2435,31 @@ Redis 在 lua 脚本中除了提供了 redis.call 函数外，同样也提供了
 
 redis.call 函数调用会产生错误，脚本遇到这种错误会返回怎样的信息呢？
 
-```redis
+```shell
 127.0.0.1:6379> hset foo x 1 y 2
 (integer) 2
 127.0.0.1:6379> eval 'return redis.call("incr", "foo")' 0
 (error) ERR Error running script (call to f_8727c9c34a61783916ca488b366c475cb3a446cc): @user_script:1: WRONGTYPE Operation against a key holding the wrong kind of value
 ```
 
-客户端输出的依然是一个通用的错误消息，而不是 incr 调用本应该返回的 WRONGTYPE 类型的错误消息。Redis 内部在处理 redis.call 遇到错误时是向上抛出异常，外围的用户看不见的 pcall调用捕获到脚本异常时会向客户端回复通用的错误信息。如果我们将上面的 call 改成 pcall，结果就会不一样，它可以将内部指令返回的特定错误向上传递。
+客户端输出的依然是一个通用的错误消息，而不是 incr 调用本应该返回的 WRONGTYPE 类型的错误消息。Redis 内部在处理 redis.call 遇到错误时是向上抛出异常，外围的用户看不见的 pcall 调用捕获到脚本异常时会向客户端回复通用的错误信息。如果我们将上面的 call 改成 pcall，结果就会不一样，它可以将内部指令返回的特定错误向上传递。
 
-```redis
+```shell
 127.0.0.1:6379> eval 'return redis.pcall("incr", "foo")' 0
 (error) WRONGTYPE Operation against a key holding the wrong kind of value
 ```
 
 ### 脚本死循环怎么办？
 
-Redis 的指令执行是个单线程，这个单线程还要执行来自客户端的 lua 脚本。如果 lua 脚本中来一个死循环，是不是 Redis 就完蛋了？Redis 为了解决这个问题，<u>它提供了 script kill 指令用于动态杀死一个执行时间超时的 lua 脚本。</u>不过 script kill 的执行有一个重要的前提，那就是当前正在执行的脚本没有对 Redis 的内部数据状态进行修改，因为 Redis 不允许 script kill 破坏脚本执行的原子性。比如脚本内部使用了 redis.call("set", key, value) 修改了内部的数据，那么 script kill 执行时服务器会返回错误。下面我们来尝试以下 script kill 指令。
+Redis 的指令执行是个单线程，这个单线程还要执行来自客户端的 lua 脚本。如果 lua 脚本中来一个死循环，是不是 Redis 就完蛋了？Redis 为了解决这个问题，*它提供了 `script kill` 指令用于动态杀死一个执行时间超时的 lua 脚本*。不过 script kill 的执行有一个重要的前提，那就是当前正在执行的脚本没有对 Redis 的内部数据状态进行修改，因为 Redis 不允许 script kill 破坏脚本执行的原子性。比如脚本内部使用了 redis.call("set", key, value) 修改了内部的数据，那么 script kill 执行时服务器会返回错误。下面我们来尝试以下 script kill 指令。
 
-```redis
+```shell
 127.0.0.1:6379> eval 'while(true) do print("hello") end' 0
 ```
 
 eval 指令执行后，可以明显看出来 redis 卡死了，死活没有任何响应，如果去观察 Redis 服务器日志可以看到日志在疯狂输出 hello 字符串。这时候就必须重新开启一个 redis-cli 来执行 script kill 指令。
 
-```redis
+```shell
 127.0.0.1:6379> script kill
 OK
 (2.58s)
@@ -2467,16 +2467,17 @@ OK
 
 再回过头看 eval 指令的输出
 
-```redis
+```shell
 127.0.0.1:6379> eval 'while(true) do print("hello") end' 0
 (error) ERR Error running script (call to f_d395649372f578b1a0d3a1dc1b2389717cadf403): @user_script:1: Script killed by user with SCRIPT KILL...
 (6.99s)
 ```
 
-有几个疑点：  
-第一个是 script kill 指令为什么执行了 2.58 秒  
-第二个是脚本都卡死了，Redis 哪里来的闲功夫接受 script kill 指令。  
-如果你自己尝试了在第二个窗口执行 redis-cli 去连接服务器，你还会发现第三个疑点，redis-cli 建立连接有点慢，大约顿了有 1 秒左右。
+有几个疑点：
+
+1. 第一个是 script kill 指令为什么执行了 2.58 秒
+2. 第二个是脚本都卡死了，Redis 哪里来的闲功夫接受 script kill 指令。  
+3. 如果你自己尝试了在第二个窗口执行 redis-cli 去连接服务器，你还会发现第三个疑点，redis-cli 建立连接有点慢，大约顿了有 1 秒左右。
 
 ### Script Kill 的原理
 
@@ -2490,7 +2491,7 @@ Redis 在钩子函数里会忙里偷闲去处理客户端的请求，并且只�
 
 ### 执行单条命令
 
-平时在访问 Redis 服务器，一般都会使用 redis-cli 进入交互模式，然后一问一答来读写服务器，这种情况下我们使用的是它的「交互模式」。还有另外一种「直接模式」，通过将命令参数直接传递给 redis-cli 来执行指令并获取输出结果。
+平时在访问 Redis 服务器，一般都会使用 redis-cli 进入交互模式，然后一问一答来读写服务器，这种情况下我们使用的是它的「交互模式」。还有另外一种「**直接模式**」，通过将命令参数直接传递给 redis-cli 来执行指令并获取输出结果。
 
 ```shell
 $ redis-cli incrby foo 5
@@ -2543,7 +2544,7 @@ OK
 
 ### set 多行字符串
 
-如果一个字符串有多行，你希望将它传入 set 指令，redis-cli 要如何做？<u>可以使用 -x 选项，该选项会使用标准输入的内容作为最后一个参数。</u>
+如果一个字符串有多行，你希望将它传入 set 指令，redis-cli 要如何做？*可以使用 `-x` 选项，该选项会使用标准输入的内容作为最后一个参数*。
 
 ```shell
 $ cat str.txt
@@ -2572,7 +2573,7 @@ instantaneous_ops_per_sec:47216
 
 如果将次数设置为 -1 那就是重复无数次永远执行下去。如果不提供 -i 参数，那就没有间隔，连续重复执行。在交互模式下也可以重复执行指令，形式上比较怪异，在指令前面增加次数
 
-```redis
+```shell
 127.0.0.1:6379> 5 ping
 PONG
 PONG
@@ -2601,7 +2602,7 @@ $ redis-cli --csv hgetall hfoo
 
 当然这种导出功能比较弱，仅仅是一堆字符串用逗号分割开来。不过你可以结合命令的批量执行来看看多个指令的导出效果。
 
-```redis
+```shell
 $ redis-cli --csv -r 5 hgetall hfoo
 "a","1","b","2","c","3","d","4"
 "a","1","b","2","c","3","d","4"
@@ -2614,7 +2615,7 @@ $ redis-cli --csv -r 5 hgetall hfoo
 
 在 lua 脚本小节，我们使用 eval 指令来执行脚本字符串，每次都是将脚本内容压缩成单行字符串再调用 eval 指令，这非常繁琐，而且可读性很差。redis-cli 考虑到了这点，它可以直接执行脚本文件。
 
-```redis
+```shell
 127.0.0.1:6379> eval "return redis.pcall('mset', KEYS[1], ARGV[1], KEYS[2], ARGV[2])" 2 foo1 foo2 bar1 bar2
 OK
 127.0.0.1:6379> eval "return redis.pcall('mget', KEYS[1], KEYS[2])" 2 foo1 foo2
@@ -2642,7 +2643,7 @@ $ redis-cli --eval mget.txt foo1 foo2
 
 我们可以使用 --stat 参数来实时监控服务器的状态，间隔 1s 实时输出一次。
 
-```redis
+```shell
 $ redis-cli --stat
 ------- data ------ --------------------- load -------------------- - child -
 keys       mem      clients blocked requests            connections
@@ -2658,7 +2659,7 @@ keys       mem      clients blocked requests            connections
 
 ### 扫描大 KEY
 
-这个功能太实用了，我已经在线上试过无数次了。每次遇到 Redis 偶然卡顿问题，第一个想到的就是实例中是否存在大 KEY，大 KEY 的内存扩容以及释放都会导致主线程卡顿。如果知道里面有没有大 KEY，可以自己写程序扫描，不过这太繁琐了。redis-cli 提供了 --bigkeys 参数可以很快扫出内存里的大 KEY，使用 -i 参数控制扫描间隔，避免扫描指令导致服务器的 ops 陡增报警。
+这个功能太实用了，我已经在线上试过无数次了。每次遇到 Redis 偶然卡顿问题，第一个想到的就是实例中是否存在大 KEY，大 KEY 的内存扩容以及释放都会导致主线程卡顿。如果知道里面有没有大 KEY，可以自己写程序扫描，不过这太繁琐了。**redis-cli 提供了 --bigkeys 参数可以很快扫出内存里的大 KEY，使用 -i 参数控制扫描间隔，避免扫描指令导致服务器的 ops 陡增报警**。
 
 ```shell
 $ ./redis-cli --bigkeys -i 0.01
@@ -2705,11 +2706,12 @@ min: 0, max: 5, avg: 0.08 (305 samples)
 
 ```shell
 $ redis-cli --latency-dist
+.
 ```
 
 ### 远程 rdb 备份
 
-执行下面的命令就可以将远程的 Redis 实例备份到本地机器，远程服务器会执行一次bgsave操作，然后将 rdb 文件传输到客户端。远程 rdb 备份让我们有一种“秀才不出门，全知天下事”的感觉。
+执行下面的命令就可以将远程的 Redis 实例备份到本地机器，远程服务器会执行一次 bgsave 操作，然后将 rdb 文件传输到客户端。远程 rdb 备份让我们有一种“秀才不出门，全知天下事”的感觉。
 
 ```shell
 $ ./redis-cli --host 192.168.x.x --port 6379 --rdb ./user.rdb
@@ -3025,7 +3027,7 @@ unsigned int LRU_CLOCK(void) {
 
 Redis 4.0 给淘汰策略配置参数 maxmemory-policy 增加了 2 个选项，分别是 volatile-lfu 和 allkeys-lfu，分别是对带过期时间的 key 进行 lfu 淘汰以及对所有的 key 执行 lfu 淘汰算法。打开了这个选项之后，就可以使用 object freq 指令获取对象的 lfu 计数值了。
 
-```redis
+```shell
 > config set maxmemory-policy allkeys-lfu
 OK
 > set codehole yeahyeahyeah
@@ -3043,11 +3045,11 @@ OK
 
 ## 36. 如履薄冰 —— 懒惰删除的巨大牺牲
 
-**异步线程在 Redis 内部有一个特别的名称，它就是 BIO，全称是 Background IO，意思是在背后默默干活的 IO 线程。**不过内存回收本身并不是什么 IO 操作，只是 CPU 的计算消耗可能会比较大而已。
+**异步线程在 Redis 内部有一个特别的名称，它就是 BIO，全称是 Background IO，意思是在背后默默干活的 IO 线程**。不过内存回收本身并不是什么 IO 操作，只是 CPU 的计算消耗可能会比较大而已。
 
 ### 懒惰删除的最初实现不是异步线程
 
-Antirez 实现懒惰删除时，它并不是一开始就想到了异步线程。<u>最初的尝试是在主线程里，使用类似于字典渐进式搬迁那样来实现渐进式删除回收。</u>比如对于一个非常大的字典来说，懒惰删除是采用类似于 scan 操作的方法，通过遍历第一维数组来逐步删除回收第二维链表的内容，等到所有链表都回收完了，再一次性回收第一维数组。这样也可以达到删除大对象时不阻塞主线程的效果。
+Antirez 实现懒惰删除时，它并不是一开始就想到了异步线程。*最初的尝试是在主线程里，使用类似于字典渐进式搬迁那样来实现渐进式删除回收*。比如对于一个非常大的字典来说，懒惰删除是采用类似于 scan 操作的方法，通过遍历第一维数组来逐步删除回收第二维链表的内容，等到所有链表都回收完了，再一次性回收第一维数组。这样也可以达到删除大对象时不阻塞主线程的效果。
 
 但是说起来容易做起来却很难。渐进式回收需要仔细控制回收频率，它不能回收的太猛，这会导致 CPU 资源占用过多，也不能回收的蜗牛慢，因为内存回收不及时可能导致内存持续增长。
 
@@ -3063,7 +3065,7 @@ Redis 的内部对象有共享机制，严重阻碍了异步线程方案的改�
 
 比如集合的并集操作 sunionstore 用来将多个集合合并成一个新集合
 
-```redis
+```shell
 > sadd src1 value1 value2 value3
 (integer) 3
 > sadd src2 value3 value4 value5
@@ -3082,7 +3084,7 @@ Redis 的内部对象有共享机制，严重阻碍了异步线程方案的改�
 
 ![image](https://mail.wangkekai.cn/321A6E01-4D67-4CCD-892A-3927A3D71BC5.png)
 
-为什么对象共享是懒惰删除的巨大障碍呢？因为懒惰删除相当于彻底砍掉某个树枝，将它扔到异步删除队列里去。注意这里必须是彻底删除，而不能藕断丝连。**如果底层对象是共享的，那就做不到彻底删除。**
+为什么对象共享是懒惰删除的巨大障碍呢？因为懒惰删除相当于彻底砍掉某个树枝，将它扔到异步删除队列里去。注意这里必须是彻底删除，而不能藕断丝连。**如果底层对象是共享的，那就做不到彻底删除**。
 
 ![image](https://mail.wangkekai.cn/0AC74D70-4E9E-411E-AC61-6482AA0C0E36.png)
 
