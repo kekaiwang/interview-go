@@ -334,6 +334,8 @@ ALTER TABLE tbl_name WAIT N add column ...
 
 ![image](https://mail.wangkekai.cn/30FFAA92-652B-4B68-A8E4-C6F1EB13E6C1.png)
 
+事务A查询到的值是 1 ，事务B查询到的值是 3。
+
 ### “快照”在 MVCC 里是怎么工作的？
 
 InnoDB 里面每个事务有一个唯一的事务 ID，叫作 `transaction id`。它是在事务开始的时候向 InnoDB 的事务系统申请的，是按申请顺序严格递增的。
