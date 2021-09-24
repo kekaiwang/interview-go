@@ -1171,6 +1171,7 @@ mysql> select * from table_a where b='1234567890abcd';
 ### 幻读是什么？
 
 ![image](https://mail.wangkekai.cn/lockinhuandu1603420961601.jpg)
+session A 里的三次查询，查询所有 d=5 的行，而且使用的是当前读，并且加上写锁。
 
 1. Q1 只返回 id=5 这一行；
 2. 在 T2 时刻，session B 把 id=0 这一行的 d 值改成了 5，因此 T3 时刻 Q2 查出来的是 id=0 和 id=5 这两行；
@@ -1189,6 +1190,14 @@ Q3 读到 id=1 这一行的现象，被称为“幻读”
 ### 幻读有什么问题？
 
 **首先是语义上的**。session A 在 T1 时刻就声明了，“我要把所有 d=5 的行锁住，不准别的事务进行读写操作”。而实际上，这个语义被破坏了。
+
+![image](https://mail.wangkekai.cn/E0998DD6-19C0-47B3-84A8-91BB28E70111.png)
+
+session B 的第二条语句 update t set c=5 where id=0，语义是“我把 id=0、d=5 这一行的 c 值，改成了 5”。
+
+由于在 T1 时刻，session A 还只是给 id=5 这一行加了行锁， 并没有给 id=0 这行加上锁。因此，session B 在 T2 时刻，是可以执行这两条 update 语句的。这样，就破坏了 session A 里 Q1 语句要锁住所有 d=5 的行的加锁声明。
+
+session C 也是一样的道理，对 id=1 这一行的修改，也是破坏了 Q1 的加锁声明。
 
 **其次，是数据一致性的问题。** 锁的设计是为了保证数据的一致性。而这个一致性，不止是数据库内部数据状态在此刻的一致性，还包含了数据和日志在逻辑上的一致性。
 
