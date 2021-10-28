@@ -1195,7 +1195,7 @@ Q3 读到 id=1 这一行的现象，被称为“幻读”
 
 session B 的第二条语句 update t set c=5 where id=0，语义是“我把 id=0、d=5 这一行的 c 值，改成了 5”。
 
-由于在 T1 时刻，session A 还只是给 id=5 这一行加了行锁， 并没有给 id=0 这行加上锁。因此，session B 在 T2 时刻，是可以执行这两条 update 语句的。这样，就破坏了 session A 里 Q1 语句要锁住所有 d=5 的行的加锁声明。
+由于在 T1 时刻，session A 还只是给 id=5 这一行加了行锁，并没有给 id=0 这行加上锁。因此，session B 在 T2 时刻，是可以执行这两条 update 语句的。这样，就破坏了 session A 里 Q1 语句要锁住所有 d=5 的行的加锁声明。
 
 session C 也是一样的道理，对 id=1 这一行的修改，也是破坏了 Q1 的加锁声明。
 
