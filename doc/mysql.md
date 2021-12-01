@@ -1219,8 +1219,8 @@ session C 也是一样的道理，对 id=1 这一行的修改，也是破坏了 
 
 1. **原则 1**：**加锁的基本单位是 next-key lock**。next-key lock 是前开后闭区间。
 2. **原则 2**：查找过程中访问到的对象才会加锁。
-3. **优化 1**：**索引上的等值查询，给唯一索引加锁的时候**，next-key lock 退化为行锁。
-4. **优化 2**：索引上的等值查询，向右遍历时且最后一个值不满足等值条件的时候，next-key lock 退化为间隙锁。
+3. **优化 1**：**索引上的等值查询，给唯一索引加锁的时候，next-key lock 退化为行锁**。
+4. **优化 2**：索引上的等值查询，向右遍历时且最后一个值不满足等值条件的时候，**next-key lock 退化为间隙锁**。
 5. **一个 bug**：唯一索引上的范围查询会访问到不满足条件的第一个值为止。
 
 ### 非唯一索引等值锁
@@ -1262,9 +1262,9 @@ begin; <br> select id from t where c = 5 <br> lock in share mode;|  |
 
 有的业务代码会在短时间内先大量申请数据库连接做备用，如果现在数据库确认是被连接行为打挂了，那么一种可能的做法，是==让数据库跳过权限验证阶段==。
 
-**跳过权限验证的方法是**：++重启数据库，并使用–skip-grant-tables 参数启动++。这样，整个 MySQL 会跳过所有的权限验证阶段，包括连接过程和语句执行过程在内。
+**跳过权限验证的方法是**：重启数据库，并使用 `–skip-grant-tables` 参数启动。这样，整个 MySQL 会跳过所有的权限验证阶段，包括连接过程和语句执行过程在内。
 
-> 在 MySQL 8.0 版本里，如果你启用–skip-grant-tables 参数，MySQL 会默认把 --skip-networking 参数打开，表示这时候数据库只能被本地的客户端连接。
+> 在 MySQL 8.0 版本里，如果你启用 –skip-grant-tables 参数，MySQL 会默认把 --skip-networking 参数打开，表示这时候数据库只能被本地的客户端连接。
 
 ### 慢查询性能问题
 
@@ -1276,13 +1276,13 @@ begin; <br> select id from t where c = 5 <br> lock in share mode;|  |
 
 #### 导致慢查询的第一种可能是，索引没有设计好
 
-1. 在备库 B 上执行 set sql_log_bin=off，也就是不写 binlog，然后执行 alter table 语句加上索引；
+1. 在备库 B 上执行 `set sql_log_bin=off`，也就是不写 binlog，然后执行 alter table 语句加上索引；
 2. 执行主备切换；
-3. 这时候主库是 B，备库是 A。在 A 上执行 set sql_log_bin=off，然后执行 alter table 语句加上索引。
+3. 这时候主库是 B，备库是 A。在 A 上执行 `set sql_log_bin=off`，然后执行 alter table 语句加上索引。
 
 #### 导致慢查询的第三种可能，MySQL 选错了索引
 
-这时候，应急方案就是给这个语句加上 force index。
+这时候，应急方案就是给这个语句加上 `force index`。
 
 1. 上线前，在测试环境，把慢查询日志（slow log）打开，并且把 long_query_time 设置成 0，确保每个语句都会被记录入慢查询日志；
 2. 在测试表里插入模拟线上的数据，做一遍回归测试；
@@ -1304,7 +1304,7 @@ binlog 的写入逻辑比较简单：事务执行过程中，先把日志写到 
 
 系统给 binlog cache 分配了一片内存，每个线程一个，参数 binlog_cache_size 用于控制单个线程内 binlog cache 所占内存的大小。如果超过了这个参数规定的大小，就要暂存到磁盘。
 
-事务提交的时候，执行器把 binlog cache 里的完整事务写入到 binlog 中，并清空 binlog cache。状态如图 1 所示。
+事务提交的时候，执行器把 binlog cache 里的完整事务写入到 binlog 中，并清空 binlog cache。状态如下图所示。
 ![image](https://mail.wangkekai.cn/224F7159-52BB-486B-BA0F-94BF7640E9FA.png)
 可以看到，每个线程有自己 binlog cache，但是共用同一份 binlog 文件。
 
@@ -1313,9 +1313,9 @@ binlog 的写入逻辑比较简单：事务执行过程中，先把日志写到 
 
 **write 和 fsync 的时机，是由参数 sync_binlog 控制的**：
 
-1. sync_binlog=0 的时候，表示每次提交事务都只 write，不 fsync；
-2. sync_binlog=1 的时候，表示每次提交事务都会执行 fsync；
-3. sync_binlog=N(N>1) 的时候，表示每次提交事务都 write，但累积 N 个事务后才 fsync。
+1. **sync_binlog=0** 的时候，表示每次提交事务都只 write，不 fsync；
+2. **sync_binlog=1** 的时候，表示每次提交事务都会执行 fsync；
+3. **sync_binlog=N(N>1)** 的时候，表示每次提交事务都 write，但累积 N 个事务后才 fsync。
 
  > 将 sync_binlog 设置为 N，对应的风险是：如果主机发生异常重启，会丢失最近 N 个事务的 binlog 日志。
 
