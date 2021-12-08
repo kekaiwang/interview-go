@@ -2118,7 +2118,7 @@ start slave;
 3. 在备库执行 binlog 完成。
 
 ![image](https://mail.wangkekai.cn/D4A01867-B438-495C-934B-ACA5BAFC6CD1.png)
-<center>备库还没有收到 trx 3 </center>
+**备库还没有收到 trx 3**
 
 这时，主库上执行完成了三个事务 trx1、trx2 和 trx3，其中：
 
@@ -2129,7 +2129,7 @@ start slave;
 
 ### 配合 semi-sync
 
-要解决这个问题，就要引入半同步复制，也就是 semi-sync replication。
+要解决这个问题，就要引入半同步复制，也就是 `semi-sync replication`。
 
 semi-sync 做了这样的设计：
 
@@ -2145,12 +2145,12 @@ semi-sync+ 位点判断的方案，**只对一主一备的场景是成立的**�
 1. 如果查询是落在这个响应了 ack 的从库上，是能够确保读到最新数据；
 2. 但如果是查询落到其他从库上，它们可能还没有收到最新的日志，就会产生过期读的问题。
 
-其实，判断同步位点的方案还有另外一个潜在的问题，即：<u>如果在业务更新的高峰期，主库的位点或者 GTID 集合更新很快，那么上面的两个位点等值判断就会一直不成立，很可能出现从库上迟迟无法响应查询请求的情况。</u>
+其实，判断同步位点的方案还有另外一个潜在的问题，即：*如果在业务更新的高峰期，主库的位点或者 GTID 集合更新很快，那么上面的两个位点等值判断就会一直不成立，很可能出现从库上迟迟无法响应查询请求的情况*。
 
 实际上，回到我们最初的业务逻辑里，当发起一个查询请求以后，我们要得到准确的结果，其实并不需要等到“主备完全同步”。
 
 ![image](https://mail.wangkekai.cn/39931035-21DE-4B73-B548-97CC1A4E53CA.png)
-<center>主备持续延迟一个事务 - 等待位点方案的一个 bad case</center>
+**主备持续延迟一个事务 - 等待位点方案的一个 bad case**
 
 semi-sync 配合判断主备无延迟的方案，存在两个问题：
 
@@ -2214,9 +2214,9 @@ select wait_for_executed_gtid_set(gtid_set, 1);
 
 在上面的第一步中，trx1 事务更新完成后，从返回包直接获取这个事务的 GTID。问题是，怎么能够让 MySQL 在执行事务后，返回包中带上 GTID 呢？
 
-<u>你只需要将参数 session_track_gtids 设置为 OWN_GTID，然后通过 API 接口 mysql_session_track_get_first 从返回包解析出 GTID 的值即可。</u>
+*你只需要将参数 session_track_gtids 设置为 OWN_GTID，然后通过 API 接口 mysql_session_track_get_first 从返回包解析出 GTID 的值即可*。
 
-#### <font color=red>Q</font>: 如果使用 GTID 等位点的方案做读写分离，在对大表做 DDL 的时候会怎么样。
+**Q: 如果使用 GTID 等位点的方案做读写分离，在对大表做 DDL 的时候会怎么样?**
 
 假设，这条语句在主库上要执行 10 分钟，提交后传到备库就要 10 分钟（典型的大事务）。那么，在主库 DDL 之后再提交的事务的 GTID，去备库查的时候，就会等 10 分钟才出现。
 
@@ -2248,26 +2248,26 @@ insert into t values(1,1)
 
 session A | session B | session C | session D
 ---|---|---|---
-select sleep(100) from t; | select sleep(100) from t; | select sleep(100) from t; | <br>
-<br> | | | select 1;(Query OK);<br>select * from t;(blocked)
+select sleep(100) from t; | select sleep(100) from t; | select sleep(100) from t; |
+. | | | select 1;(Query OK);select * from t;(blocked)
 
-> 我们设置 innodb_thread_concurrency 参数的目的是，控制 InnoDB 的并发线程上限。*也就是说，一旦并发线程数达到这个值，InnoDB 在接收到新请求的时候，就会进入等待状态，直到有线程退出。*
+设置 `innodb_thread_concurrency` 参数的目的是，控制 InnoDB 的并发线程上限。**也就是说，一旦并发线程数达到这个值，InnoDB 在接收到新请求的时候，就会进入等待状态，直到有线程退出**。
 
-你看到了， session D 里面，select 1 是能执行成功的，但是查询表 t 的语句会被堵住。**也就是说，如果这时候我们用 select 1 来检测实例是否正常的话，是检测不出问题的。**
+session D 里面，select 1 是能执行成功的，但是查询表 t 的语句会被堵住。**也就是说，如果这时候我们用 select 1 来检测实例是否正常的话，是检测不出问题的。**
 
-在 InnoDB 中，innodb_thread_concurrency 这个参数的默认值是 0，<font color=red>表示不限制并发线程数量。</font>但是，不限制并发线程数肯定是不行的。因为，一个机器的 CPU 核数有限，线程全冲进来，上下文切换的成本就会太高。  
-所以，通常情况下，<font color=red>我们建议把 innodb_thread_concurrency 设置为 64~128 之间的值。</font>这时，你一定会有疑问，并发线程上限数设置为 128 够干啥，线上的并发连接数动不动就上千了。
+在 InnoDB 中，innodb_thread_concurrency 这个参数的默认值是 0，**表示不限制并发线程数量**。但是，不限制并发线程数肯定是不行的。因为，一个机器的 CPU 核数有限，线程全冲进来，上下文切换的成本就会太高。  
+通常情况下，**我们建议把 innodb_thread_concurrency 设置为 64~128 之间的值**。这时，你一定会有疑问，并发线程上限数设置为 128 够干啥，线上的并发连接数动不动就上千了。
 
-> 在 show processlist 的结果里，看到的几千个连接，指的就是<font color=red>并发连接</font>。而“当前正在执行”的语句，才是我们所说的<font color=red>并发查询</font>。
+> 在 show processlist 的结果里，看到的几千个连接，指的就是并发连接。而“当前正在执行”的语句，才是我们所说的并发查询。
 
-**在线程进入锁等待以后，并发线程的计数会减一。**也就是说等行锁（也包括间隙锁）的线程是不算在 128 里面的。
+**在线程进入锁等待以后，并发线程的计数会减一**。也就是说等行锁（也包括间隙锁）的线程是不算在 128 里面的。
 
 MySQL 这样设计是非常有意义的。因为，进入锁等待的线程已经不吃 CPU 了；更重要的是，必须这么设计，才能避免整个系统锁死。
 
 假设处于锁等待的线程也占并发线程的计数，你可以设想一下这个场景：
 
-1. 线程 1 执行 begin; update t set c=c+1 where id=1, 启动了事务 trx1， 然后保持这个状态。这时候，线程处于空闲状态，不算在并发线程里面。
-2. 线程 2 到线程 129 都执行 update t set c=c+1 where id=1; 由于等行锁，进入等待状态。这样就有 128 个线程处于等待状态；
+1. 线程 1 执行 `begin; update t set c=c+1 where id=1`, 启动了事务 trx1， 然后保持这个状态。这时候，线程处于空闲状态，不算在并发线程里面。
+2. 线程 2 到线程 129 都执行 `update t set c=c+1 where id=1`; 由于等行锁，进入等待状态。这样就有 128 个线程处于等待状态；
 3. 如果处于锁等待状态的线程计数不减一，InnoDB 就会认为线程数用满了，会阻止其他语句进入引擎执行，这样线程 1 不能提交事务。而另外的 128 个线程又处于锁等待状态，整个系统就堵住了。
 
 ![image](https://mail.wangkekai.cn/40F19CCF-9CC9-4D8D-838B-2EC6BD94A3A2.png)
@@ -2286,9 +2286,9 @@ MySQL 这样设计是非常有意义的。因为，进入锁等待的线程已�
 select * from mysql.health_check; 
 ```
 
-<u>使用这个方法，我们可以检测出由于并发线程过多导致的数据库不可用的情况。</u>
+_使用这个方法，我们可以检测出由于并发线程过多导致的数据库不可用的情况_。
 
-更新事务要写 binlog，而一旦 binlog 所在磁盘的空间占用率达到 100%，那么所有的更新语句和事务提交的 commit 语句就都会被堵住。但是，<font color=red>系统这时候还是可以正常读数据的。</font>
+更新事务要写 binlog，而一旦 binlog 所在磁盘的空间占用率达到 100%，那么所有的更新语句和事务提交的 commit 语句就都会被堵住。但是，**系统这时候还是可以正常读数据的**。
 
 ### 更新判断
 
