@@ -2255,7 +2255,7 @@ select sleep(100) from t; | select sleep(100) from t; | select sleep(100) from t
 
 session D 里面，select 1 是能执行成功的，但是查询表 t 的语句会被堵住。**也就是说，如果这时候我们用 select 1 来检测实例是否正常的话，是检测不出问题的。**
 
-在 InnoDB 中，innodb_thread_concurrency 这个参数的默认值是 0，**表示不限制并发线程数量**。但是，不限制并发线程数肯定是不行的。因为，一个机器的 CPU 核数有限，线程全冲进来，上下文切换的成本就会太高。  
+在 InnoDB 中，`innodb_thread_concurrency` 这个参数的默认值是 0，**表示不限制并发线程数量**。但是，不限制并发线程数肯定是不行的。因为，一个机器的 CPU 核数有限，线程全冲进来，上下文切换的成本就会太高。  
 通常情况下，**我们建议把 innodb_thread_concurrency 设置为 64~128 之间的值**。这时，你一定会有疑问，并发线程上限数设置为 128 够干啥，线上的并发连接数动不动就上千了。
 
 > 在 show processlist 的结果里，看到的几千个连接，指的就是并发连接。而“当前正在执行”的语句，才是我们所说的并发查询。
@@ -2300,9 +2300,9 @@ mysql> update mysql.health_check set t_modified=now();
 
 节点可用性的检测都应该包含主库和备库。如果用更新来检测主库的话，那么备库也要进行更新检测。  
 但，备库的检测也是要写 binlog 的。由于我们一般会把数据库 A 和 B 的主备关系设计为双 M 结构，所以在备库 B 上执行的检测命令，也要发回给主库 A。  
-但是，<u>如果主库 A 和备库 B 都用相同的更新命令，就可能出现行冲突，也就是可能会导致主备同步停止。</u>所以，现在看来 mysql.health_check 这个表就不能只有一行数据了。
+但是，_如果主库 A 和备库 B 都用相同的更新命令，就可能出现行冲突，也就是可能会导致主备同步停止_。所以，现在看来 `mysql.health_check` 这个表就不能只有一行数据了。
 
-为了让主备之间的更新不产生冲突，我们可以在 mysql.health_check 表上存入多行数据，并用 A、B 的 server_id 做主键。
+为了让主备之间的更新不产生冲突，我们可以在 `mysql.health_check` 表上存入多行数据，并用 A、B 的 server_id 做主键。
 
 ```mysql
 mysql> CREATE TABLE `health_check` (
@@ -2337,15 +2337,15 @@ IO 利用率 100% 表示系统的 IO 是在工作的，每个请求都有机会�
 file_summary_by_event_name 表里有很多行数据，我们先来看看 event_name='wait/io/file/innodb/innodb_log_file’这一行。
 
 ![image](https://mail.wangkekai.cn/558A0F43-8734-4544-9BD7-E5A2EF72707C.png)
-<center>performance_schema.file_summary_by_event_name 的一行</center>
+performance_schema.file_summary_by_event_name 的一行
 
-图中这一行表示统计的是 redo log 的写入时间，第一列 EVENT_NAME 表示统计的类型。
+图中这一行表示统计的是 redo log 的写入时间，第一列 `EVENT_NAME` 表示统计的类型。
 
 接下来的三组数据，显示的是 redo log 操作的时间统计。
 
-第一组五列，是所有 IO 类型的统计。其中，COUNT_STAR 是所有 IO 的总次数，接下来四列是具体的统计项， 单位是皮秒；前缀 SUM、MIN、AVG、MAX，顾名思义指的就是总和、最小值、平均值和最大值。
+第一组五列，是所有 IO 类型的统计。其中，`COUNT_STAR` 是所有 IO 的总次数，接下来四列是具体的统计项， 单位是皮秒；前缀 `SUM、MIN、AVG、MAX`，*顾名思义指的就是总和、最小值、平均值和最大值*。
 
-第二组六列，是读操作的统计。最后一列 SUM_NUMBER_OF_BYTES_READ 统计的是，总共从 redo log 里读了多少个字节。
+第二组六列，是读操作的统计。最后一列 `SUM_NUMBER_OF_BYTES_READ` 统计的是，总共从 redo log 里读了多少个字节。
 
 第三组六列，统计的是写操作。
 
@@ -2353,20 +2353,20 @@ file_summary_by_event_name 表里有很多行数据，我们先来看看 event_n
 
 > 在 performance_schema 库的 file_summary_by_event_name 表里，binlog 对应的是 event_name = "wait/io/file/sql/binlog"这一行。各个字段的统计逻辑，与 redo log 的各个字段完全相同。
 
-<font color=red>如果打开所有的 performance_schema 项，性能大概会下降 10% 左右。</font>所以，我建议你只打开自己需要的项进行统计。你可以通过下面的方法打开或者关闭某个具体项的统计。
+**如果打开所有的 performance_schema 项，性能大概会下降 10% 左右**。所以，建议只打开自己需要的项进行统计。可以通过下面的方法打开或者关闭某个具体项的统计。
 
 ```mysql
 mysql> update setup_instruments set ENABLED='YES', Timed='YES' where name like '%wait/io/file/innodb/innodb_log_file%';
 ```
 
-假设，现在你已经开启了 redo log 和 binlog 这两个统计信息，那要怎么把这个信息用在实例状态诊断上呢？  
-很简单，你可以通过 MAX_TIMER 的值来判断数据库是否出问题了。比如，你可以设定阈值，单次 IO 请求时间超过 200 毫秒属于异常，然后使用类似下面这条语句作为检测逻辑。
+假设，现在已经开启了 redo log 和 binlog 这两个统计信息，那要怎么把这个信息用在实例状态诊断上呢？  
+很简单，可以通过 MAX_TIMER 的值来判断数据库是否出问题了。比如可以设定阈值，单次 IO 请求时间超过 200 毫秒属于异常，然后使用类似下面这条语句作为检测逻辑。
 
 ```mysql
 mysql> select event_name,MAX_TIMER_WAIT  FROM performance_schema.file_summary_by_event_name where event_name in ('wait/io/file/innodb/innodb_log_file','wait/io/file/sql/binlog') and MAX_TIMER_WAIT>200*1000000000;
 ```
 
-发现异常后，取到你需要的信息，再通过下面这条语句：
+发现异常后，取到需要的信息，再通过下面这条语句：
 
 ```mysql
 mysql> truncate table performance_schema.file_summary_by_event_name;
@@ -2376,10 +2376,10 @@ mysql> truncate table performance_schema.file_summary_by_event_name;
 
 **加锁规则中，包含了两个“原则”、两个“优化”和一个“bug”：**
 
-- 原则 1：加锁的基本单位是 next-key lock。希望你还记得，next-key lock 是前开后闭区间。
+- 原则 1：加锁的基本单位是 `next-key lock`。希望你还记得，`next-key lock` 是**前开后闭区间**。
 - 原则 2：查找过程中访问到的对象才会加锁。
-- 优化 1：索引上的等值查询，给唯一索引加锁的时候，next-key lock 退化为行锁。
-- 优化 2：索引上的等值查询，向右遍历时且最后一个值不满足等值条件的时候，next-key lock 退化为间隙锁。
+- 优化 1：索引上的等值查询，给唯一索引加锁的时候，`next-key lock` 退化为行锁。
+- 优化 2：索引上的等值查询，向右遍历时且最后一个值不满足等值条件的时候，`next-key lock` **退化为间隙锁**。
 - 一个 bug：唯一索引上的范围查询会访问到不满足条件的第一个值为止。
 
 **我们的讨论基于下面这个表：**
@@ -2407,12 +2407,12 @@ select * from t where id>9 and id<12 order by id desc for update;
 ```
 
 利用上面的加锁规则，我们知道这个语句的加锁范围是主键索引上的 (0,5]、(5,10] 和 (10, 15)。也就是说，id=15 这一行，并没有被加上行锁。  
-我们说加锁单位是 next-key lock，都是前开后闭区间，但是这里用到了优化 2，即索引上的等值查询，向右遍历的时候 id=15 不满足条件，所以 next-key lock 退化为了间隙锁 (10, 15)。  
-<font color=red>加锁动作是发生在语句执行过程中的，所以你在分析加锁行为的时候，要从索引上的数据结构开始。</font>
+我们说加锁单位是 next-key lock，都是前开后闭区间，但是这里用到了优化 2，即*索引上的等值查询，向右遍历的时候 id=15 不满足条件，所以 next-key lock 退化为了间隙锁 (10, 15)*。  
+**加锁动作是发生在语句执行过程中的，所以你在分析加锁行为的时候，要从索引上的数据结构开始**。
 
 ![image](https://mail.wangkekai.cn/1613656427559.jpg)
 
-1. 首先这个查询语句的语义是 order by id desc，要拿到满足条件的所有行，优化器必须先找到“第一个 id<12 的值”。
+1. 首先这个查询语句的语义是 `order by id desc`，要拿到满足条件的所有行，优化器必须先找到“第一个 id<12 的值”。
 2. 这个过程是通过索引树的搜索过程得到的，在引擎内部，其实是要找到 id=12 的这个值，只是最终没找到，但找到了 (10,15) 这个间隙。
 3. 然后向左遍历，在遍历过程中，就不是等值查询了，会扫描到 id=5 这一行，所以会加一个 next-key lock (0,5]。
 
@@ -2433,7 +2433,7 @@ select id from t where c in(5,20,10) lock in share mode;
 可以看到，这条 in 语句使用了索引 c 并且 rows=3，说明这三个值都是通过 B+ 树搜索定位的。  
 在查找 c=5 的时候，先锁住了 (0,5]。**但是因为 c 不是唯一索引，为了确认还有没有别的记录 c=5，就要向右遍历，找到 c=10 才确认没有了，这个过程满足优化 2，所以加了间隙锁 (5,10)**。  
 同样的，执行 c=10 这个逻辑的时候，加锁的范围是 (5,10] 和 (10,15)；执行 c=20 这个逻辑的时候，加锁的范围是 (15,20] 和 (20,25)。  
-这条语句在索引 c 上加的三个记录锁的顺序是：先加 c=5 的记录锁，再加 c=10 的记录锁，最后加 c=20 的记录锁。<font color=red>这些锁是“在执行过程中一个一个加的”，而不是一次性加上去的。</font>
+这条语句在索引 c 上加的三个记录锁的顺序是：先加 c=5 的记录锁，再加 c=10 的记录锁，最后加 c=20 的记录锁。**这些锁是“在执行过程中一个一个加的”，而不是一次性加上去的**。
 
 ```mysql
 select id from t where c in(5,20,10) order by c desc for update;
@@ -2446,7 +2446,7 @@ select id from t where c in(5,20,10) order by c desc for update;
 
 ### 怎么看死锁？
 
-执行 show engine innodb status 命令得到的部分输出。这个命令会输出很多信息，有一节 LATESTDETECTED DEADLOCK，就是记录的最后一次死锁信息。
+执行 `show engine innodb status` 命令得到的部分输出。这个命令会输出很多信息，有一节 LATESTDETECTED DEADLOCK，就是记录的最后一次死锁信息。
 
 ![image](https://mail.wangkekai.cn/1613656886176.jpg)
 
@@ -2458,10 +2458,10 @@ select id from t where c in(5,20,10) order by c desc for update;
 WE ROLL BACK TRANSACTION (1)，是最终的处理结果，表示回滚了第一个事务。
 2. 第一个事务的信息中：
 
-   - WAITING FOR THIS LOCK TO BE GRANTED，表示的是这个事务在等待的锁信息；
-   - index c of table `test`.`t`，说明在等的是表 t 的索引 c 上面的锁；
-   - lock mode S waiting 表示这个语句要自己加一个读锁，当前的状态是等待中；
-   - Record lock 说明这是一个记录锁；
+   - `WAITING FOR THIS LOCK TO BE GRANTED`，表示的是这个事务在等待的锁信息；
+   - `index c of table test.t`，说明在等的是表 t 的索引 c 上面的锁；
+   - `lock mode S waiting` 表示这个语句要自己加一个读锁，当前的状态是等待中；
+   - `Record lock` 说明这是一个记录锁；
    - n_fields 2 表示这个记录是两列，也就是字段 c 和主键字段 id；
    - 0: len 4; hex 0000000a; asc ;; 是第一个字段，也就是 c。值是十六进制 a，也就是 10；
    - 1: len 4; hex 0000000a; asc ;; 是第二个字段，也就是主键 id，值也是 10；
@@ -2471,9 +2471,9 @@ WE ROLL BACK TRANSACTION (1)，是最终的处理结果，表示回滚了第一�
 3. 第二个事务显示的信息要多一些：
 
    - “ HOLDS THE LOCK(S)”用来显示这个事务持有哪些锁；
-   - index c of table `test`.`t` 表示锁是在表 t 的索引 c 上；
+   - `index c of table test.t` 表示锁是在表 t 的索引 c 上；
    - hex 0000000a 和 hex 00000014 表示这个事务持有 c=10 和 c=20 这两个记录锁；
-   - WAITING FOR THIS LOCK TO BE GRANTED，表示在等 (c=5,id=5) 这个记录锁。
+   - `WAITING FOR THIS LOCK TO BE GRANTED`，表示在等 (c=5,id=5) 这个记录锁。
 
 从上面这些信息中，我们就知道：
 
@@ -2491,16 +2491,16 @@ WE ROLL BACK TRANSACTION (1)，是最终的处理结果，表示回滚了第一�
 
 可以看到，由于 session A 并没有锁住 c=10 这个记录，所以 session B 删除 id=10 这一行是可以的。但是之后，session B 再想 insert id=10 这一行回去就不行了。
 
-现在我们一起看一下此时 show engine innodb status 的结果，看看能不能给我们一些提示。锁信息是在这个命令输出结果的 TRANSACTIONS 这一节。你可以在文稿中看到这张图片
+现在我们一起看一下此时 `show engine innodb status` 的结果，看看能不能给我们一些提示。锁信息是在这个命令输出结果的 TRANSACTIONS 这一节。你可以在文稿中看到这张图片
 
 ![image](https://mail.wangkekai.cn/1613657387410.jpg)
 
 我们看几个关键信息：
 
-1. index PRIMARY of table `test`.`t` ，表示这个语句被锁住是因为表 t 主键上的某个锁。
+1. `index PRIMARY of table test.t` ，表示这个语句被锁住是因为表 t 主键上的某个锁。
 2. lock_mode X locks gap before rec insert intention waiting 这里有几个信息：
-   - insert intention 表示当前线程准备插入一个记录，这是一个插入意向锁。为了便于理解，你可以认为它就是这个插入动作本身。
-   - gap before rec 表示这是一个间隙锁，而不是记录锁。
+   - `insert intention` 表示当前线程准备插入一个记录，这是一个插入意向锁。为了便于理解，你可以认为它就是这个插入动作本身。
+   - `gap before rec` 表示这是一个间隙锁，而不是记录锁。
 3. 那么这个 gap 是在哪个记录之前的呢？接下来的 0~4 这 5 行的内容就是这个记录的信息。
 4. n_fields 5 也表示了，这一个记录有 5 列：
    - 0: len 4; hex 0000000f; asc ;; 第一列是主键 id 字段，十六进制 f 就是 id=15。所以，这时我们就知道了，这个间隙就是 id=15 之前的，因为 id=10 已经不存在了，它表示的就是 (5,15)。
@@ -2579,19 +2579,19 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 恢复数据比较安全的做法，是恢复出一个备份，或者找一个从库作为临时库，在这个临时库上执行这些操作，然后再将确认过的临时库的数据，恢复回主库。  
 因为，一个在执行线上逻辑的主库，数据状态的变更往往是有关联的。可能由于发现数据问题的时间晚了一点儿，就导致已经在之前误操作的基础上，业务代码逻辑又继续修改了其他数据。所以，如果这时候单独恢复这几行数据，而又未经确认的话，就可能会出现对数据的二次破坏。
 
-**不止要说误删数据的事后处理办法，更重要是要做到事前预防。**我有以下两个建议：
+**不止要说误删数据的事后处理办法，更重要是要做到事前预防**。我有以下两个建议：
 
-1. 把 sql_safe_updates 参数设置为 on。这样一来，如果我们忘记在 delete 或者 update 语句中写 where 条件，或者 where 条件里面没有包含索引字段的话，这条语句的执行就会报错。
+1. 把 `sql_safe_updates` 参数设置为 on。这样一来，如果我们忘记在 delete 或者 update 语句中写 where 条件，或者 where 条件里面没有包含索引字段的话，这条语句的执行就会报错。
 2. 代码上线前，必须经过 SQL 审计。
 
 > delete 全表是很慢的，需要生成回滚日志、写 redo、写 binlog。所以，从性能角度考虑，你应该优先考虑使用 truncate table 或者 drop table 命令。
 
-使用 delete 命令删除的数据，你还可以用 Flashback 来恢复。而使用 truncate /drop table 和 drop database 命令删除的数据，就没办法通过 Flashback 来恢复了。为什么呢？  
-因为，<font color=red>即使我们配置了 binlog_format=row，执行这三个命令时，记录的 binlog 还是 statement 格式。binlog 里面就只有一个 truncate/drop 语句，这些信息是恢复不出数据的。</font>
+使用 delete 命令删除的数据，你还可以用 Flashback 来恢复。而使用 `truncate /drop table` 和 `drop database` 命令删除的数据，就没办法通过 Flashback 来恢复了。  
+因为，**即使我们配置了 binlog_format=row，执行这三个命令时，记录的 binlog 还是 statement 格式。binlog 里面就只有一个 truncate/drop 语句，这些信息是恢复不出数据的**。
 
 ### 误删库 / 表
 
-这种情况下，要想恢复数据，**就需要使用全量备份，加增量日志的方式了。**这个方案要求线上有定期的全量备份，并且实时备份 binlog。
+这种情况下，要想恢复数据，**就需要使用全量备份，加增量日志的方式了**。这个方案要求线上有定期的全量备份，并且实时备份 binlog。
 
 在这两个条件都具备的情况下，假如有人中午 12 点误删了一个库，恢复数据的流程如下：
 
@@ -2604,10 +2604,10 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 
 关于这个过程说明如下几点：
 
-1. 为了加速数据恢复，如果这个临时库上有多个数据库，你可以在使用 mysqlbinlog 命令时，加上一个–database 参数，用来指定误删表所在的库。这样，就避免了在恢复数据时还要应用其他库日志的情况。
+1. 为了加速数据恢复，*如果这个临时库上有多个数据库，你可以在使用 mysqlbinlog 命令时，加上一个 `–database` 参数，用来指定误删表所在的库。这样，就避免了在恢复数据时还要应用其他库日志的情况*。
 2. 在应用日志的时候，需要跳过 12 点误操作的那个语句的 binlog：
-    - 如果原实例没有使用 GTID 模式，只能在应用到包含 12 点的 binlog 文件的时候，先用–stop-position 参数执行到误操作之前的日志，然后再用–start-position 从误操作之后的日志继续执行；
-    - 如果实例使用了 GTID 模式，就方便多了。假设误操作命令的 GTID 是 gtid1，那么只需要执行 set gtid_next=gtid1;begin;commit; 先把这个 GTID 加到临时实例的 GTID 集合，之后按顺序执行 binlog 的时候，就会自动跳过误操作的语句。
+    - 如果原实例没有使用 GTID 模式，只能在应用到包含 12 点的 binlog 文件的时候，先用 `–stop-position` 参数执行到误操作之前的日志，然后再用 `–start-position` 从误操作之后的日志继续执行；
+    - 如果实例使用了 GTID 模式，就方便多了。假设误操作命令的 GTID 是 gtid1，那么只需要执行 `set gtid_next=gtid1;begin;commit;` 先把这个 GTID 加到临时实例的 GTID 集合，之后按顺序执行 binlog 的时候，就会自动跳过误操作的语句。
 
 使用 mysqlbinlog 方法恢复数据还是不够快，主要原因有两个：
 
@@ -2616,7 +2616,7 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 
 **一种加速的方法是**，在用备份恢复出临时实例之后，将这个临时实例设置成线上备库的从库，这样：
 
-1. 在 start slave 之前，先通过执行 change replication filter replicate_do_table = (tbl_name) 命令，就可以让临时库只同步误操作的表；
+1. 在 start slave 之前，先通过执行 `change replication filter replicate_do_table = (tbl_name)` 命令，就可以让临时库只同步误操作的表；
 2. 这样做也可以用上并行复制技术，来加速整个数据恢复过程。
 
 ![image](https://mail.wangkekai.cn/B111C57E-061E-42E0-ADA5-8D72130FC4AD.png)
@@ -2637,10 +2637,10 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 ### 延迟复制备库
 
 如果一个库的备份特别大，或者误操作的时间距离上一个全量备份的时间较长，比如一周一备的实例，在备份之后的第 6 天发生误操作，那就需要恢复 6 天的日志，这个恢复时间可能是要按天来计算的。  
-如果有非常核心的业务，不允许太长的恢复时间，**我们可以考虑搭建延迟复制的备库**。<font color=red>这个功能是 MySQL 5.6 版本引入的。</font>
+如果有非常核心的业务，不允许太长的恢复时间，**我们可以考虑搭建延迟复制的备库**。*这个功能是 MySQL 5.6 版本引入的*。
 
 一般的主备复制结构存在的问题是，如果主库上有个表被误删了，这个命令很快也会被发给所有从库，进而导致所有从库的数据表也都一起被误删了。  
-延迟复制的备库是一种特殊的备库，<u>通过 CHANGE MASTER TO MASTER_DELAY = N 命令，可以指定这个备库持续保持跟主库有 N 秒的延迟。</u>
+延迟复制的备库是一种特殊的备库，*通过 `CHANGE MASTER TO MASTER_DELAY = N` 命令，可以指定这个备库持续保持跟主库有 N 秒的延迟*。
 
 比如你把 N 设置为 3600，这就代表了如果主库上有数据被误删了，并且在 1 小时内发现了这个误操作命令，这个命令就还没有在这个延迟复制的备库执行。这时候到这个备库上执行 stop slave，再通过之前介绍的方法，跳过误操作命令，就可以恢复出需要的数据。
 
@@ -2675,7 +2675,7 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 
 上图中 session B 是直接终止掉线程，什么都不管就直接退出吗？显然，这是不行的。
 > 当对一个表做增删改查操作时，会在表上加 MDL 读锁。所以，session B 虽然处于 blocked 状态，但还是拿着一个 MDL 读锁的。如果线程被 kill 的时候，就直接终止，那之后这个 MDL 读锁就没机会被释放了。
-其实，这跟 Linux 的 kill 命令类似，kill -N pid 并不是让进程直接停止，而是给进程发一个信号，然后进程处理这个信号，进入终止逻辑。只是对于 MySQL 的 kill 命令来说，不需要传信号量参数，就只有“停止”这个命令。
+其实，这跟 Linux 的 kill 命令类似，`kill -N pid` 并不是让进程直接停止，而是给进程发一个信号，然后进程处理这个信号，进入终止逻辑。只是对于 MySQL 的 kill 命令来说，不需要传信号量参数，就只有“停止”这个命令。
 
 **当用户执行 kill query thread_id_B 时，MySQL 里处理 kill 命令的线程做了两件事：**
 
@@ -2693,7 +2693,7 @@ session B 处于锁等待状态，如果只是把 session B 的线程状态设�
 
 **再看一个 kill 不掉的例子**。
 
-首先，执行 set global innodb_thread_concurrency=2，将 InnoDB 的并发线程上限数设置为 2；然后，执行下面的序列：
+首先，执行 `set global innodb_thread_concurrency=2`，将 InnoDB 的并发线程上限数设置为 2；然后，执行下面的序列：
 ![image](https://mail.wangkekai.cn/9E6236D1-BEB8-4C57-BEB2-C6AB789222CF.png)
 
 1. sesssion C 执行的时候被堵住了；
@@ -2707,7 +2707,7 @@ session B 处于锁等待状态，如果只是把 session B 的线程状态设�
 
 **为什么在执行 kill query 命令时，这条语句不像第一个例子的 update 语句一样退出呢？**
 
-在实现上，等行锁时，使用的是 pthread_cond_timedwait 函数，这个等待状态可以被唤醒。但是，在这个例子里，12 号线程的等待逻辑是这样的：每 10 毫秒判断一下是否可以进入 InnoDB 执行，如果不行，就调用 nanosleep 函数进入 sleep 状态。  
+在实现上，等行锁时，使用的是 `pthread_cond_timedwait` 函数，这个等待状态可以被唤醒。但是，在这个例子里，12 号线程的等待逻辑是这样的：每 10 毫秒判断一下是否可以进入 InnoDB 执行，如果不行，就调用 nanosleep 函数进入 sleep 状态。  
 也就是说，虽然 12 号线程的状态已经被设置成了 KILL_QUERY，但是在这个等待进入 InnoDB 的循环过程中，并没有去判断线程的状态，因此根本不会进入终止逻辑阶段。
 
 而当 session E 执行 kill connection 命令时，是这么做的，
@@ -2723,9 +2723,9 @@ session B 处于锁等待状态，如果只是把 session B 的线程状态设�
 
 只有等到满足进入 InnoDB 的条件后，session C 的查询语句继续执行，然后才有可能判断到线程状态已经变成了 KILL_QUERY 或者 KILL_CONNECTION，再进入终止逻辑阶段。
 
-**这个例子是 kill 无效的第一类情况，即：线程没有执行到判断线程状态的逻辑。**跟这种情况相同的，还有由于 IO 压力过大，读写 IO 的函数一直无法返回，导致不能及时判断线程的状态。
+**这个例子是 kill 无效的第一类情况，即：线程没有执行到判断线程状态的逻辑**。跟这种情况相同的，还有由于 IO 压力过大，读写 IO 的函数一直无法返回，导致不能及时判断线程的状态。
 
-**另一类情况是，终止逻辑耗时较长。这时候，从 show processlist 结果上看也是 Command=Killed，需要等到终止逻辑完成，语句才算真正完成。**这类情况，比较常见的场景有以下几种：
+**另一类情况是，终止逻辑耗时较长。这时候，从 show processlist 结果上看也是 Command=Killed，需要等到终止逻辑完成，语句才算真正完成**。这类情况，比较常见的场景有以下几种：
 
 1. 超大事务执行期间被 kill。这时候，回滚操作需要对事务执行期间生成的所有新数据版本做回收操作，耗时很长。
 2. 大查询回滚。如果查询过程中生成了比较大的临时文件，加上此时文件系统压力大，删除临时文件可能需要等待 IO 资源，导致耗时较长。
@@ -2737,7 +2737,7 @@ session B 处于锁等待状态，如果只是把 session B 的线程状态设�
 
 这里有一个误解，**其实在客户端的操作只能操作到客户端的线程，客户端和服务端只能通过网络交互，是不可能直接操作服务端线程的。**
 
-而<font color=red>由于 MySQL 是停等协议，所以这个线程执行的语句还没有返回的时候，再往这个连接里面继续发命令也是没有用的。</font>实际上，执行 Ctrl+C 的时候，是 MySQL 客户端另外启动一个连接，然后发送一个 kill query 命令。
+*而由于 MySQL 是停等协议，所以这个线程执行的语句还没有返回的时候，再往这个连接里面继续发命令也是没有用的*。实际上，执行 Ctrl+C 的时候，是 MySQL 客户端另外启动一个连接，然后发送一个 kill query 命令。
 
 所以，你可别以为在客户端执行完 Ctrl+C 就万事大吉了。因为，要 kill 掉一个线程，还涉及到后端的很多操作。
 
@@ -2757,7 +2757,7 @@ session B 处于锁等待状态，如果只是把 session B 的线程状态设�
 
 > 在这些操作中，最花时间的就是第三步在本地构建哈希表的操作。所以，当一个库中的表个数非常多的时候，这一步就会花比较长的时间。
 
-<font color=red>我们感知到的连接过程慢，其实并不是连接慢，也不是服务端慢，而是客户端慢。</font>
+**我们感知到的连接过程慢，其实并不是连接慢，也不是服务端慢，而是客户端慢**。
 
 图中的提示也说了，如果在连接命令中加上 -A，就可以关掉这个自动补全的功能，然后客户端就可以快速返回了。  
 这里自动补全的效果就是，你在输入库名或者表名的时候，输入前缀，可以使用 Tab 键自动补全表名或者显示提示。
@@ -2785,7 +2785,7 @@ MySQL 客户端发送请求后，接收服务端返回结果的方式有两种�
 mysql -h$host -P$port -u$user -p$pwd -e "select * from db1.t" > $target_file
 ```
 
-<font color=red>InnoDB 的数据是保存在主键索引上的，所以全表扫描实际上是直接扫描表 t 的主键索引。</font>这条查询语句由于没有其他的判断条件，所以查到的每一行都可以直接放到结果集里面，然后返回给客户端。
+**InnoDB 的数据是保存在主键索引上的，所以全表扫描实际上是直接扫描表 t 的主键索引**。这条查询语句由于没有其他的判断条件，所以查到的每一行都可以直接放到结果集里面，然后返回给客户端。
 
 实际上，服务端并不需要保存一个完整的结果集。取数据和发数据的流程是这样的：
 
