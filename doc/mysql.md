@@ -2798,11 +2798,11 @@ mysql -h$host -P$port -u$user -p$pwd -e "select * from db1.t" > $target_file
 
 从这个流程中可以看到：
 
-1. 一个查询在发送过程中，占用的 MySQL 内部的内存最大就是 net_buffer_length 这么大，并不会达到 200G；
+1. 一个查询在发送过程中，占用的 MySQL 内部的内存最大就是 `net_buffer_length` 这么大，并不会达到 200G；
 2. `socket send buffer` 也不可能达到 200G（默认定义 /proc/sys/net/core/wmem_default），如果 `socket send buffer` 被写满，就会暂停读数据的流程。
 
 **MySQL 是“边读边发的”**，这个概念很重要。这就意味着，如果客户端接收得慢，会导致 MySQL 服务端由于结果发不出去，这个事务的执行时间变长。  
-故意让客户端不去读 socket receive buffer 中的内容，下图是在服务端 show processlist 看到的结果。
+故意让客户端不去读 `socket receive buffer` 中的内容，下图是在服务端 show processlist 看到的结果。
 
 ![image](https://mail.wangkekai.cn/BF12D3D5-9EFD-42B9-B7A8-383D43D34D2C.png)
 
@@ -2828,10 +2828,10 @@ mysql -h$host -P$port -u$user -p$pwd -e "select * from db1.t" > $target_file
 > InnoDB 内存的一个作用，是保存更新的结果，再配合 redo log，就避免了随机写盘。
 
 当事务提交的时候，磁盘上的数据页是旧的，那如果这时候马上有一个查询要来读这个数据页，是不是要马上把 redo log 应用到数据页呢？  
-答案是不需要。因为**这时候内存数据页的结果是最新的，直接读内存页就可以了**。这时候查询根本不需要读磁盘，直接从内存拿结果，速度是很快的。<font color=red>所以说，Buffer Pool 还有加速查询的作用。</font>  
+答案是不需要。因为**这时候内存数据页的结果是最新的，直接读内存页就可以了**。这时候查询根本不需要读磁盘，直接从内存拿结果，速度是很快的。**所以说，Buffer Pool 还有加速查询的作用**。  
 而 Buffer Pool 对查询的加速效果，依赖于一个重要的指标，即：**内存命中率。**
 
-你可以在 show engine innodb status 结果中，查看一个系统当前的 BP 命中率。一般情况下，一个稳定服务的线上系统，要保证响应时间符合要求的话，内存命中率要在 99% 以上。
+你可以在 `show engine innodb status` 结果中，查看一个系统当前的 BP 命中率。一般情况下，一个稳定服务的线上系统，要保证响应时间符合要求的话，内存命中率要在 99% 以上。
 
 InnoDB Buffer Pool 的大小是由参数 innodb_buffer_pool_size 确定的，一般建议设置成可用物理内存的 60%~80%。
 
@@ -2859,7 +2859,7 @@ InnoDB 管理 Buffer Pool 的 LRU 算法，是用链表来实现的。
 
 ![image](https://mail.wangkekai.cn/8DCEBCD3-1859-4713-B28A-490BD224054D.png)
 
-在 InnoDB 实现上，按照 5:3 的比例把整个 LRU 链表分成了 young 区域和 old 区域。图中 LRU_old 指向的就是 old 区域的第一个位置，是整个链表的 5/8 处。也就是说，靠近链表头部的 5/8 是 young 区域，靠近链表尾部的 3/8 是 old 区域。
+在 InnoDB 实现上，**按照 5:3 的比例把整个 LRU 链表分成了 young 区域和 old 区域**。图中 LRU_old 指向的就是 old 区域的第一个位置，是整个链表的 5/8 处。也就是说，靠近链表头部的 5/8 是 young 区域，靠近链表尾部的 3/8 是 old 区域。
 
 改进后的 LRU 算法执行流程变成了下面这样。
 
@@ -2868,7 +2868,7 @@ InnoDB 管理 Buffer Pool 的 LRU 算法，是用链表来实现的。
 3. 处于 old 区域的数据页，每次被访问的时候都要做下面这个判断：
 
    - 若这个数据页在 LRU 链表中存在的时间超过了 1 秒，就把它移动到链表头部；
-   - 如果这个数据页在 LRU 链表中存在的时间短于 1 秒，位置保持不变。1 秒这个时间，是由参数 innodb_old_blocks_time 控制的。其默认值是 1000，单位毫秒。
+   - 如果这个数据页在 LRU 链表中存在的时间短于 1 秒，位置保持不变。1 秒这个时间，是由参数 `innodb_old_blocks_time` 控制的。其默认值是 1000，单位毫秒。
 
 看看改进后的 LRU 算法的操作逻辑：
 
@@ -2878,7 +2878,7 @@ InnoDB 管理 Buffer Pool 的 LRU 算法，是用链表来实现的。
 
 可以看到，这个策略最大的收益，就是在扫描这个大表的过程中，虽然也用到了 Buffer Pool，但是对 young 区域完全没有影响，从而保证了 Buffer Pool 响应正常业务的查询命中率。
 
-<font color=red>Q: </font>如果客户端由于压力过大，迟迟不能接收数据，会对服务端造成什么严重的影响。
+**Q: 如果客户端由于压力过大，迟迟不能接收数据，会对服务端造成什么严重的影响**。
 
 这个问题的核心是，造成了“长事务”。  
 至于长事务的影响，就要结合我们前面文章中提到的锁、MVCC 的知识点了。
@@ -2923,7 +2923,7 @@ insert into t1 (select * from t2 where id<=100)
 select * from t1 straight_join t2 on (t1.a=t2.a);
 ```
 
-如果直接使用 join 语句，MySQL 优化器可能会选择表 t1 或 t2 作为驱动表，这样会影响我们分析 SQL 语句的执行过程。使用 straight_join 让 MySQL 使用固定的连接方式执行查询，这样优化器只会按照我们指定的方式去 join。*在这个语句里，t1 是驱动表，t2 是被驱动表。*
+如果直接使用 join 语句，MySQL 优化器可能会选择表 t1 或 t2 作为驱动表，这样会影响我们分析 SQL 语句的执行过程。使用 `straight_join` 让 MySQL 使用固定的连接方式执行查询，这样优化器只会按照我们指定的方式去 join。*在这个语句里，t1 是驱动表，t2 是被驱动表。*
 
 ![image](https://mail.wangkekai.cn/1613744559202.jpg)
 
@@ -3005,7 +3005,7 @@ select * from t1 straight_join t2 on (t1.a=t2.b);
 1. 两个表都做一次全表扫描，所以总的扫描行数是 M+N；
 2. 内存中的判断次数是 M*N。
 
-join_buffer 的大小是由参数 join_buffer_size 设定的，默认值是 256k。如果放不下表 t1 的所有数据话，策略很简单，就是分段放。我把 join_buffer_size 改成 1200，再执行 sql 。
+join_buffer 的大小是由参数 `join_buffer_size` 设定的，默认值是 256k。如果放不下表 t1 的所有数据话，策略很简单，就是分段放。我把 `join_buffer_size` 改成 1200，再执行 sql 。
 
 执行过程就变成了：
 
@@ -3112,28 +3112,28 @@ select * from t1 where a>=1 and a<=100;
 
 ![image](https://mail.wangkekai.cn/11CC32CD-8239-4119-85B6-B45DF59B48A1.png)
 
-<u>如果随着 a 的值递增顺序查询的话，id 的值就变成随机的，那么就会出现随机访问，性能相对较差。</u>
+*如果随着 a 的值递增顺序查询的话，id 的值就变成随机的，那么就会出现随机访问，性能相对较差*。
 
 **因为大多数的数据都是按照主键递增顺序插入得到的，所以我们可以认为，如果按照主键的递增顺序查询的话，对磁盘的读比较接近顺序读，能够提升读性能。**
 
 这，就是 MRR 优化的设计思路。此时，语句的执行流程变成了这样：
 
-1. 根据索引 a，定位到满足条件的记录，将 id 值放入 read_rnd_buffer 中 ;
-2. 将 read_rnd_buffer 中的 id 进行递增排序；
+1. 根据索引 a，定位到满足条件的记录，将 id 值放入 `read_rnd_buffer` 中 ;
+2. 将 `read_rnd_buffer` 中的 id 进行递增排序；
 3. 排序后的 id 数组，依次到主键 id 索引中查记录，并作为结果返回。
 
 这里，read_rnd_buffer 的大小是由 read_rnd_buffer_size 参数控制的。如果步骤 1 中，read_rnd_buffer 放满了，就会先执行完步骤 2 和 3，然后清空 read_rnd_buffer。之后继续找索引 a 的下个记录，并继续循环。
 
-> 另外需要说明的是，如果你想要稳定地使用 MRR 优化的话，需要设置set optimizer_switch="mrr_cost_based=off"。
+另外需要说明的是，**如果想要稳定地使用 MRR 优化的话，需要设置 `set optimizer_switch="mrr_cost_based=off"`**。
 
 下面两幅图就是使用了 MRR 优化后的执行流程和 explain 结果。
 ![image](https://mail.wangkekai.cn/1614003006074.jpg)
 
 ![image](https://mail.wangkekai.cn/1614003055819.jpg)
 
-从图 3 的 explain 结果中，**可以看到 Extra 字段多了 Using MRR，表示的是用上了 MRR 优化。**而且，由于我们在 read_rnd_buffer 中按照 id 做了排序，所以最后得到的结果集也是按照主键 id 递增顺序的，也就是与图 1 结果集中行的顺序相反。
+从上图的 explain 结果中，**可以看到 Extra 字段多了 Using MRR，表示的是用上了 MRR 优化**。而且，由于我们在 `read_rnd_buffer` 中按照 id 做了排序，所以最后得到的结果集也是按照主键 id 递增顺序的，也就是与图 1 结果集中行的顺序相反。
 
-**MRR 能够提升性能的核心在于**，这条查询语句在索引 a 上做的是一个范围查询（也就是说，这是一个多值查询），可以得到足够多的主键 id。这样**通过排序以后，再去主键索引查数据，才能体现出“顺序性”的优势。**
+*MRR 能够提升性能的核心在于，这条查询语句在索引 a 上做的是一个范围查询（也就是说，这是一个多值查询），可以得到足够多的主键 id*。这样**通过排序以后，再去主键索引查数据，才能体现出“顺序性”的优势。**
 
 ### Batched Key Access
 
@@ -3156,7 +3156,7 @@ set optimizer_switch='mrr=on,mrr_cost_based=off,batched_key_access=on';
 
 ### BNL 算法的性能问题
 
-前面 InnoDB 的 LRU 算法的时候提到，由于 InnoDB 对 Bufffer Pool 的 LRU 算法做了优化，即：<u>第一次从磁盘读入内存的数据页，会先放在 old 区域。如果 1 秒之后这个数据页不再被访问了，就不会被移动到 LRU 链表头部，这样对 Buffer Pool 的命中率影响就不大。</u>  
+前面 InnoDB 的 LRU 算法的时候提到，由于 InnoDB 对 Bufffer Pool 的 LRU 算法做了优化，即：*第一次从磁盘读入内存的数据页，会先放在 old 区域。如果 1 秒之后这个数据页不再被访问了，就不会被移动到 LRU 链表头部，这样对 Buffer Pool 的命中率影响就不大*。
 但是，如果一个使用 BNL 算法的 join 语句，多次扫描一个冷表，而且这个语句执行时间超过 1 秒，就会在再次扫描冷表的时候，把冷表的数据页移到 LRU 链表头部。
 
 这种情况对应的，是冷表的数据量小于整个 Buffer Pool 的 3/8，能够完全放入 old 区域的情况。  
@@ -3173,7 +3173,7 @@ set optimizer_switch='mrr=on,mrr_cost_based=off,batched_key_access=on';
 2. 判断 join 条件需要执行 M*N 次对比（M、N 分别是两张表的行数），如果是大表就会占用非常多的 CPU 资源；
 3. 可能会导致 Buffer Pool 的热数据被淘汰，影响内存命中率。
 
-如果 explain 优化器确认使用 BNL 算法，就需要做优化。优化的常见做法是，<font color=red>给被驱动表的 join 字段加上索引，把 BNL 算法转成 BKA 算法。</font>
+如果 explain 优化器确认使用 BNL 算法，就需要做优化。优化的常见做法是，**给被驱动表的 join 字段加上索引，把 BNL 算法转成 BKA 算法**。
 
 ### BNL 转 BKA
 
@@ -3230,14 +3230,14 @@ mysql 不支持 hash join
 2. select * from t2 where b>=1 and b<=2000; 获取表 t2 中满足条件的 2000 行数据。
 3. 把这 2000 行数据，一行一行地取到业务端，到 hash 结构的数据表中寻找匹配的数据。满足匹配的条件的这行数据，就作为结果集的一行。
 
-<font color=red> Q: </font> 
+**Q**:  
 
 ```mysql
 select * from t1 join t2 on(t1.a=t2.a) join t3 on (t2.b=t3.b) where t1.c>=X and t2.c>=Y and t3.c>=Z;
 ```
 
 如果改写成 straight_join，要怎么指定连接顺序，以及怎么给三个表创建索引。
-第一原则是要尽量使用 BKA 算法。需要注意的是，使用 BKA 算法的时候，并不是“先计算两个表 join 的结果，再跟第三个表 join”，而是直接嵌套查询的。  
+**第一原则是要尽量使用 BKA 算法**。需要注意的是，使用 BKA 算法的时候，并不是“先计算两个表 join 的结果，再跟第三个表 join”，而是直接嵌套查询的。  
 具体实现是：在 t1.c>=X、t2.c>=Y、t3.c>=Z 这三个条件里，选择一个经过过滤以后，数据最少的那个表，作为第一个驱动表。此时，可能会出现如下两种情况。
 
 **第一种情况**，如果选出来是表 t1 或者 t3，那剩下的部分就固定了。
