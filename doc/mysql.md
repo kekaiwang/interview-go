@@ -63,7 +63,7 @@ select * from T where ID = 10;
 3. 执行器将上述遍历过程中所有满足条件的行组成的记录集作为结果集返回给客户端。
 至此，这个语句就执行完成了。
 
-在数据库的慢查询日志中看到一个 `rows_examined` 的字段，*表示这个语句执行过程中扫描了多少行*。这个值就是在执行器每次调用引擎获取数据行的时候累加的。
+在数据库的慢查询日志中看到一个 `rows_examined` 的字段，**表示这个语句执行过程中扫描了多少行**。这个值就是在执行器每次调用引擎获取数据行的时候累加的。
 
 ## 02 | 日志系统：一条 SQL 更新语句是如何执行的？
 
@@ -3893,7 +3893,7 @@ MySQL 5.1.22 版本引入了一个新策略，新增参数 innodb_autoinc_lock_m
 答案是，这么设计还是为了数据的一致性。
 
 ![image](https://mail.wangkekai.cn/DB028D3E-D4B8-4D3C-A17D-D828CB2BD049.png)
-<center>批量插入语句的自增锁</center>
+批量插入语句的自增锁
 
 如果 session B 是申请了自增值以后马上就释放自增锁，那么就可能出现这样的情况：
 
@@ -3911,11 +3911,11 @@ MySQL 5.1.22 版本引入了一个新策略，新增参数 innodb_autoinc_lock_m
 1. 一种思路是，让原库的批量插入数据语句，固定生成连续的 id 值。所以，自增锁直到语句执行结束才释放，就是为了达到这个目的。
 2. 另一种思路是，在 binlog 里面把插入数据的操作都如实记录进来，到备库执行的时候，不再依赖于自增主键去生成。这种情况，其实就是 innodb_autoinc_lock_mode 设置为 2，同时 binlog_format 设置为 row。
 
-**在生产上，尤其是有 insert … select 这种批量插入数据的场景时，从并发插入数据性能的角度考虑，我建议你这样设置：innodb_autoinc_lock_mode=2 ，并且 binlog_format=row. 这样做，**既能提升并发性，又不会出现数据一致性问题。
+**在生产上，尤其是有 insert … select 这种批量插入数据的场景时，从并发插入数据性能的角度考虑，我建议你这样设置：innodb_autoinc_lock_mode=2 ，并且 binlog_format=row**。这样做，既能提升并发性，又不会出现数据一致性问题。
 
 **批量插入数据，包含的语句类型是 insert … select、replace … select 和 load data 语句。**
 
-但是，在普通的 insert 语句里面包含多个 value 值的情况下，即使 innodb_autoinc_lock_mode 设置为 1，也不会等语句执行完成才释放锁。因为这类语句在申请自增 id 的时候，是可以精确计算出需要多少个 id 的，然后一次性申请，申请完成后锁就可以释放了。
+但是，在普通的 insert 语句里面包含多个 value 值的情况下，即使 `innodb_autoinc_lock_mode` 设置为 1，也不会等语句执行完成才释放锁。因为这类语句在申请自增 id 的时候，是可以精确计算出需要多少个 id 的，然后一次性申请，申请完成后锁就可以释放了。
 
 既然预先不知道要申请多少个自增 id，那么一种直接的想法就是需要一个时申请一个。但如果一个 select … insert 语句要插入 10 万行数据，按照这个逻辑的话就要申请 10 万次。显然，这种申请自增 id 的策略，在大批量插入数据的情况下，不但速度慢，还会影响并发插入的性能。
 
@@ -3939,19 +3939,19 @@ insert into t2 values(null, 5,5);
 ```
 
 insert…select，实际上往表 t2 中插入了 4 行数据。但是，这四行数据是分三次申请的自增 id，第一次申请到了 id=1，第二次被分配了 id=2 和 id=3， 第三次被分配到 id=4 到 id=7。  
-由于这条语句实际只用上了 4 个 id，所以 id=5 到 id=7 就被浪费掉了。之后，再执行 insert into t2 values(null, 5,5)，实际上插入的数据就是（8,5,5)。
+由于这条语句实际只用上了 4 个 id，所以 id=5 到 id=7 就被浪费掉了。之后，再执行 `insert into t2 values(null, 5,5)`，实际上插入的数据就是（8,5,5)。
 
 这是主键 id 出现自增 id 不连续的第三种原因。
 
-### 小结
+### 小结```
 
 在 MyISAM 引擎里面，自增值是被写在数据文件上的。而在 InnoDB 中，自增值是被记录在内存的。MySQL 直到 8.0 版本，才给 InnoDB 表的自增值加上了持久化的能力，确保重启前后一个表的自增值不变。
 
 在一个语句执行过程中，自增值改变的时机，分析了为什么 MySQL 在事务回滚的时候不能回收自增 id。
 
-MySQL 5.1.22 版本开始引入的参数 innodb_autoinc_lock_mode，控制了自增值申请时的锁范围。从并发性能的角度考虑，我建议你将其设置为 2，同时将 binlog_format 设置为 row。我在前面的文章中其实多次提到，binlog_format 设置为 row，是很有必要的。今天的例子给这个结论多了一个理由。
+**MySQL 5.1.22 版本开始引入的参数 innodb_autoinc_lock_mode，控制了自增值申请时的锁范围**。从并发性能的角度考虑，我建议你将其设置为 2，同时将 binlog_format 设置为 row。我在前面的文章中其实多次提到，binlog_format 设置为 row，是很有必要的。今天的例子给这个结论多了一个理由。
 
-<font color=red> Q: </font> 如果在 insert … select 执行期间有其他线程操作原表，会导致逻辑错误。其实，这是不会的，如果不加锁，就是快照读。
+Q:  *如果在 `insert … select` 执行期间有其他线程操作原表，会导致逻辑错误*。其实，这是不会的，如果不加锁，就是快照读。
 
 一条语句执行期间，它的一致性视图是不会修改的，所以即使有其他事务修改了原表的数据，也不会影响这条语句看到的数据。
 
@@ -4017,7 +4017,7 @@ insert into t(c,d)  (select c+1, d from t force index(c) order by c desc limit 1
 下图是在执行这个语句前后查看 Innodb_rows_read 的结果。
 ![image](https://mail.wangkekai.cn/4CC5E966-C0C5-4E60-98D5-63532249078E.png)
 
-这个语句执行前后，Innodb_rows_read 的值增加了 4。因为默认临时表是使用 Memory 引擎的，所以这 4 行查的都是表 t，也就是说对表 t 做了全表扫描。
+这个语句执行前后，Innodb_rows_read 的值增加了 4。**因为默认临时表是使用 Memory 引擎的**，所以这 4 行查的都是表 t，也就是说对表 t 做了全表扫描。
 
 这样，我们就把整个执行过程理清楚了：
 
@@ -4043,16 +4043,16 @@ drop table temp_t;
 ### insert 唯一键冲突
 
 ![image](https://mail.wangkekai.cn/4A023A79-3B70-40DD-9275-CF85E0D04455.png)
-<center>唯一键冲突加锁</center>
+*唯一键冲突加锁*
 
 这个例子也是在可重复读（repeatable read）隔离级别下执行的。可以看到，session B 要执行的 insert 语句进入了锁等待状态。
 
-也就是说，session A 执行的 insert 语句，**发生唯一键冲突的时候，并不只是简单地报错返回，还在冲突的索引上加了锁。**我们前面说过，一个 next-key lock 就是由它右边界的值定义的。这时候，session A 持有索引 c 上的 (5,10] 共享 next-key lock（读锁）。
+也就是说，session A 执行的 insert 语句，**发生唯一键冲突的时候，并不只是简单地报错返回，还在冲突的索引上加了锁**。我们前面说过，一个 next-key lock 就是由它右边界的值定义的。这时候，session A 持有索引 c 上的 (5,10] 共享 next-key lock（读锁）。
 
 > 官方文档有一个错误描述：如果冲突的是主键索引，就加记录锁，唯一索引才加 next-key lock。但实际上，这两类索引冲突加的都是 next-key lock。
 
 ![image](https://mail.wangkekai.cn/CDD15DBB-88D4-4929-A7E0-6A57B90B4048.png)
-<center> 唯一键冲突 -- 死锁 </center>
+*唯一键冲突 -- 死锁*
 
 这个死锁产生的逻辑是这样的：
 
@@ -4084,7 +4084,7 @@ insert into t values(11,10,10) on duplicate key update d=100;
 可以看到，主键 id 是先判断的，MySQL 认为这个语句跟 id=2 这一行冲突，所以修改的是 id=2 的行。  
 需要注意的是，执行这条语句的 affected rows 返回的是 2，很容易造成误解。实际上，真正更新的只有一行，只是在代码实现上，insert 和 update 都认为自己成功了，update 计数加了 1， insert 计数也加了 1。
 
-### 小结
+### 小结·
 
 insert … select 是很常见的在两个表之间拷贝数据的方法。你需要注意，在可重复读隔离级别下，这个语句会给 select 的表里扫描到的记录和间隙加读锁。
 
@@ -4122,7 +4122,7 @@ create table db2.t like db1.t
 
 ### mysqldump 方法
 
-一种方法是，使用 mysqldump 命令将数据导出成一组 INSERT 语句。你可以使用下面的命令：
+一种方法是，使用 `mysqldump` 命令将数据导出成一组 INSERT 语句。你可以使用下面的命令：
 
 ```mysql
 mysqldump -h$host -P$port -u$user --add-locks=0 --no-create-info --single-transaction  --set-gtid-purged=OFF db1 t --where="a>900" --result-file=/client_tmp/t.sql
@@ -4130,10 +4130,10 @@ mysqldump -h$host -P$port -u$user --add-locks=0 --no-create-info --single-transa
 
 主要参数含义如下：
 
-1. –single-transaction 的作用是，在导出数据的时候不需要对表 db1.t 加表锁，而是使用 START TRANSACTION WITH CONSISTENT SNAPSHOT 的方法；
-2. –add-locks 设置为 0，表示在输出的文件结果里，不增加" LOCK TABLES t WRITE;" ；
-3. –no-create-info 的意思是，不需要导出表结构；
-4. –set-gtid-purged=off 表示的是，不输出跟 GTID 相关的信息；
+1. `–single-transaction` 的作用是，在导出数据的时候不需要对表 db1.t 加表锁，而是使用 `START TRANSACTION WITH CONSISTENT SNAPSHOT` 的方法；
+2. `–add-locks` 设置为 0，表示在输出的文件结果里，不增加" LOCK TABLES t WRITE;" ；
+3. `–no-create-info` 的意思是，不需要导出表结构；
+4. `–set-gtid-purged=off` 表示的是，不输出跟 GTID 相关的信息；
 5. –result-file 指定了输出文件的路径，其中 client 表示生成的文件是在客户端机器上的。
 
 通过这条 mysqldump 命令生成的 t.sql 文件中就包含了如下图所示的 INSERT 语句。
@@ -4172,7 +4172,7 @@ select * from db1.t where a>900 into outfile '/server_tmp/t.csv';
 3. 这条命令不会帮你覆盖文件，因此你需要确保 /server_tmp/t.csv 这个文件不存在，否则执行语句时就会因为有同名文件的存在而报错。
 4. 这条命令生成的文本文件中，原则上一个数据行对应文本文件的一行。但是，如果字段中包含换行符，在生成的文本中也会有换行符。不过类似换行符、制表符这类符号，前面都会跟上“\”这个转义符，这样就可以跟字段之间、数据行之间的分隔符区分开。
 
-得到.csv 导出文件后，你就可以用下面的 load data 命令将数据导入到目标表 db2.t 中。
+得到 .csv 导出文件后，你就可以用下面的 load data 命令将数据导入到目标表 db2.t 中。
 
 ```mysql
 load data infile '/server_tmp/t.csv' into table db2.t;
@@ -4194,7 +4194,7 @@ load data infile '/server_tmp/t.csv' into table db2.t;
 所以，这条语句执行的完整流程，其实是下面这样的。
 
 1. 主库执行完成后，将 /server_tmp/t.csv 文件的内容直接写到 binlog 文件中。
-2. 往 binlog 文件中写入语句 load data local infile ‘/tmp/SQL_LOAD_MB-1-0’ INTO TABLE `db2`.`t`。
+2. 往 binlog 文件中写入语句 `load data local infile ‘/tmp/SQL_LOAD_MB-1-0’ INTO TABLE db2.t`。
 3. 把这个 binlog 日志传到备库。
 4. 备库的 apply 线程在执行这个事务日志时：
    a. 先将 binlog 中 t.csv 文件的内容读出来，写入到本地临时目录 /tmp/SQL_LOAD_MB-1-0 中；
@@ -4244,7 +4244,7 @@ mysqldump -h$host -P$port -u$user ---single-transaction  --set-gtid-purged=OFF d
 1. 在第 3 步执行完 flsuh table 命令之后，db1.t 整个表处于只读状态，直到执行 unlock tables 命令后才释放读锁；
 2. 在执行 import tablespace 的时候，为了让文件里的表空间 id 和数据字典中的一致，会修改 r.ibd 的表空间 id。而这个表空间 id 存在于每一个数据页中。因此，如果是一个很大的文件（比如 TB 级别），每个数据页都需要修改，所以你会看到这个 import 语句的执行是需要一些时间的。当然，如果是相比于逻辑导入的方法，import 语句的耗时是非常短的。
 
-### 小结
+### 小结⁄
 
 我们来对比一下这三种方法的优缺点。
 
@@ -4259,7 +4259,7 @@ mysqldump -h$host -P$port -u$user ---single-transaction  --set-gtid-purged=OFF d
 
 > next-key lock 是先加间隙锁，再加记录锁的。加间隙锁成功了，加记录锁就会被堵住。
 
-<font color=red> Q: </font>MySQL 解析 statement 格式的 binlog 的时候，对于 load data 命令，解析出来为什么用的是 load data local。
+Q: *MySQL 解析 statement 格式的 binlog 的时候，对于 load data 命令，解析出来为什么用的是 load data local*。
 这样做的一个原因是，为了确保备库应用 binlog 正常。因为备库可能配置了 secure_file_priv=null，所以如果不用 local 的话，可能会导入失败，造成主备同步延迟。
 
 另一种应用场景是使用 mysqlbinlog 工具解析 binlog 文件，并应用到目标库的情况。你可以使用下面这条命令 ：
