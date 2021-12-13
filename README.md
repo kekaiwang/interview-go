@@ -29,3 +29,7 @@ GoLang/PHP 面试整理
 
 - [ETCD](https://github.com/kekaiwang/interview-go/blob/main/doc/etcd.md)
 - 分布式
+
+## 每日一记
+
+- [Daily Note](https://github.com/kekaiwang/interview-go/blob/main/daily_note/)
