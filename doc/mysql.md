@@ -4308,7 +4308,7 @@ grant all privileges on *.* to 'ua'@'%' with grant option;
 基于上面的分析我们可以知道：
 
 1. grant 命令对于全局权限，同时更新了磁盘和内存。命令完成后即时生效，接下来新创建的连接会使用新的权限。
-2. 对于一个已经存在的连接，它的全局权限不受 grant 命令的影响。
+2. **对于一个已经存在的连接，它的全局权限不受 grant 命令的影响**。
 
 我们上面用到的这个 grant 语句就是一个典型的错误示范。如果一个用户有所有权限，一般就不应该设置为所有 IP 地址都可以访问。
 
@@ -4318,7 +4318,7 @@ grant all privileges on *.* to 'ua'@'%' with grant option;
 revoke all privileges on *.* from 'ua'@'%';
 ```
 
-这条 revoke 命令的用法与 grant 类似，做了如下两个动作：
+这条 `revoke` 命令的用法与 `grant` 类似，做了如下两个动作：
 
 1. 磁盘上，将 mysql.user 表里，用户’ua’@’%'这一行的所有表示权限的字段的值都修改为“N”；
 2. 内存里，从数组 acl_users 中找到这个用户对应的对象，将 access 的值修改为 0。
@@ -4340,24 +4340,24 @@ grant all privileges on db1.* to 'ua'@'%' with grant option;
 ![image](https://mail.wangkekai.cn/84F9D2B2-DF42-4AE1-BF21-9788BF4D32BC.png)
 
 每次需要判断一个用户对一个数据库读写权限的时候，都需要遍历一次 acl_dbs 数组，根据 user、host 和 db 找到匹配的对象，然后根据对象的权限位来判断。  
-也就是说，grant 修改 db 权限的时候，是同时对磁盘和内存生效的。
+也就是说，**grant 修改 db 权限的时候，是同时对磁盘和内存生效的**。
 
 grant 操作对于已经存在的连接的影响，在全局权限和基于 db 的权限效果是不同的。接下来，我们做一个对照试验来分别看一下。
 ![image](https://mail.wangkekai.cn/AE68C221-C991-45C2-ABE4-7CEA5E9D4DF4.png)
 
-图中 set global sync_binlog 这个操作是需要 super 权限的。
+图中 `set global sync_binlog` 这个操作是需要 super 权限的。
 
-可以看到，虽然用户 ua 的 super 权限在 T3 时刻已经通过 revoke 语句回收了，但是在 T4 时刻执行 set global 的时候，权限验证还是通过了。这是因为 super 是全局权限，这个权限信息在线程对象中，而 revoke 操作影响不到这个线程对象。
+可以看到，虽然用户 ua 的 super 权限在 T3 时刻已经通过 revoke 语句回收了，但是在 T4 时刻执行 set global 的时候，权限验证还是通过了。*这是因为 super 是全局权限，这个权限信息在线程对象中，而 revoke 操作影响不到这个线程对象*。
 
-而在 T5 时刻去掉 ua 对 db1 库的所有权限后，在 T6 时刻 session B 再操作 db1 库的表，就会报错“权限不足”。这是因为 acl_dbs 是一个全局数组，所有线程判断 db 权限都用这个数组，这样 revoke 操作马上就会影响到 session B。
+而在 T5 时刻去掉 ua 对 db1 库的所有权限后，在 T6 时刻 session B 再操作 db1 库的表，就会报错“权限不足”。这是**因为 acl_dbs 是一个全局数组，所有线程判断 db 权限都用这个数组**，这样 revoke 操作马上就会影响到 session B。
 
-这里在代码实现上有一个特别的逻辑，如果当前会话已经处于某一个 db 里面，之前 use 这个库的时候拿到的库权限会保存在会话变量中。
+这里在代码实现上有一个特别的逻辑，**如果当前会话已经处于某一个 db 里面，之前 use 这个库的时候拿到的库权限会保存在会话变量中**。
 
-你可以看到在 T6 时刻，session C 和 session B 对表 t 的操作逻辑是一样的。但是 session B 报错，而 session C 可以执行成功。这是因为 session C 在 T2 时刻执行的 use db1，拿到了这个库的权限，在切换出 db1 库之前，session C 对这个库就一直有权限。
+你可以看到在 T6 时刻，session C 和 session B 对表 t 的操作逻辑是一样的。但是 session B 报错，而 session C 可以执行成功。这是**因为 session C 在 T2 时刻执行的 use db1，拿到了这个库的权限，在切换出 db1 库之前，session C 对这个库就一直有权限**。
 
 ### 表权限和列权限
 
-除了 db 级别的权限外，MySQL 支持更细粒度的表权限和列权限。其中，表权限定义存放在表 mysql.tables_priv 中，列权限定义存放在表 mysql.columns_priv 中。这两类权限，组合起来存放在内存的 hash 结构 column_priv_hash 中。
+除了 db 级别的权限外，MySQL 支持更细粒度的表权限和列权限。其中，表权限定义存放在表 `mysql.tables_priv` 中，列权限定义存放在表 `mysql.columns_priv` 中。这两类权限，组合起来存放在内存的 hash 结构 `column_priv_hash` 中。
 
 这两类权限的赋权命令如下：
 
@@ -4370,7 +4370,7 @@ GRANT SELECT(id), INSERT (id,a) ON mydb.mytbl TO 'ua'@'%' with grant option;
 
 跟 db 权限类似，这两个权限每次 grant 的时候都会修改数据表，也会同步修改内存中的 hash 结构。因此，对这两类权限的操作，也会马上影响到已经存在的连接。
 
-flush privileges 命令会清空 acl_users 数组，然后从 mysql.user 表中读取数据重新加载，重新构造一个 acl_users 数组。也就是说，以数据表中的数据为准，会将全局权限内存数组重新加载一遍。  
+`flush privileges` 命令会清空 acl_users 数组，然后从 mysql.user 表中读取数据重新加载，重新构造一个 acl_users 数组。也就是说，以数据表中的数据为准，会将全局权限内存数组重新加载一遍。  
 同样地，对于 db 权限、表权限和列权限，MySQL 也做了这样的处理。
 
 也就是说，如果内存的权限数据和磁盘数据表相同的话，不需要执行 flush privileges。而如果我们都是用 grant/revoke 语句来执行的话，内存和数据表本来就是保持同步更新的。
@@ -4378,7 +4378,7 @@ flush privileges 命令会清空 acl_users 数组，然后从 mysql.user 表中�
 
 ### flush privileges 使用场景
 
-当数据表中的权限数据跟内存中的权限数据不一致的时候，flush privileges 语句可以用来重建内存数据，达到一致状态。
+当数据表中的权限数据跟内存中的权限数据不一致的时候，`flush privileges` 语句可以用来重建内存数据，达到一致状态。
 
 这种不一致往往是由不规范的操作导致的，比如直接用 DML 语句操作系统权限表。我们来看一下下面这个场景：
 ![image](https://mail.wangkekai.cn/27A69030-0D3F-49DA-A257-DBE909C06824.png)
@@ -4394,16 +4394,18 @@ flush privileges 命令会清空 acl_users 数组，然后从 mysql.user 表中�
 1. T4 时刻给用户 ua 赋权限失败，因为 mysql.user 表中找不到这行记录；
 2. 而 T5 时刻要重新创建这个用户也不行，因为在做内存判断的时候，会认为这个用户还存在。
 
-### 小结
+### 小结‹
 
-grant 语句会同时修改数据表和内存，判断权限的时候使用的是内存数据。因此，规范地使用 grant 和 revoke 语句，是不需要随后加上 flush privileges 语句的。
+grant 语句会同时修改数据表和内存，判断权限的时候使用的是内存数据。因此，*规范地使用 grant 和 revoke 语句，是不需要随后加上 flush privileges 语句的*。
 
 flush privileges 语句本身会用数据表的数据重建一份内存权限数据，所以在权限数据可能存在不一致的情况下再使用。而这种不一致往往是由于直接用 DML 语句操作系统权限表导致的，所以我们尽量不要使用这类语句。
 
 另外，在使用 grant 语句赋权时，你可能还会看到这样的写法：
+
 ```mysql
 grant super on *.* to 'ua'@'%' identified by 'pa';
 ```
+
 这条命令加了 identified by ‘密码’， 语句的逻辑里面除了赋权外，还包含了：
 
 1. 如果用户’ua’@’%'不存在，就创建这个用户，密码是 pa；
@@ -4452,12 +4454,12 @@ insert into t values('2017-4-1',1),('2018-4-1',1);
 从上面的实验效果可以看出，session B 的第一个 insert 语句是可以执行成功的。这是因为，对于引擎来说，p_2018 和 p_2019 是两个不同的表，也就是说 2017-4-1 的下一个记录并不是 2018-4-1，而是 p_2018 分区的 supremum。所以 T1 时刻，在表 t 的 ftime 索引上，间隙和加锁的状态其实是图 4 这样的：
 
 ![image](https://mail.wangkekai.cn/0A312230-8F53-4CD6-9724-C7262E2FAEF7.png)
-<center> 分区表 t 的加锁范围</center>
+*分区表 t 的加锁范围*
 
 由于分区表的规则，session A 的 select 语句其实只操作了分区 p_2018，因此加锁范围就是图 4 中深绿色的部分。  
 所以，session B 要写入一行 ftime 是 2018-2-1 的时候是可以成功的，而要写入 2017-12-1 这个记录，就要等 session A 的间隙锁。
 
-下图就是这时候的 show engine innodb status 的部分结果
+下图就是这时候的 `show engine innodb status` 的部分结果
 ![image](https://mail.wangkekai.cn/0220E9D5-E830-4BA9-AAFF-5B892233AB73.png)
 
 再来看一个 MyISAM 分区表的例子。  
@@ -4467,15 +4469,15 @@ insert into t values('2017-4-1',1),('2018-4-1',1);
 在 session A 里面，我用 sleep(100) 将这条语句的执行时间设置为 100 秒。由于 MyISAM 引擎只支持表锁，所以这条 update 语句会锁住整个表 t 上的读。  
 但我们看到的结果是，session B 的第一条查询语句是可以正常执行的，第二条语句才进入锁等待状态。
 
-**这正是因为 MyISAM 的表锁是在引擎层实现的，session A 加的表锁，其实是锁在分区 p_2018 上。**因此，只会堵住在这个分区上执行的查询，落到其他分区的查询是不受影响的。
+**这正是因为 MyISAM 的表锁是在引擎层实现的，session A 加的表锁，其实是锁在分区 p_2018 上**。因此，只会堵住在这个分区上执行的查询，落到其他分区的查询是不受影响的。
 
-分区表和手工分表，一个是由 server 层来决定使用哪个分区，一个是由应用层代码来决定使用哪个分表。因此，从引擎层看，这两种方式也是没有差别的。
+*分区表和手工分表，一个是由 server 层来决定使用哪个分区，一个是由应用层代码来决定使用哪个分表*。因此，从引擎层看，这两种方式也是没有差别的。
 
 其实这两个方案的区别，主要是在 server 层上。从 server 层看，我们就不得不提到分区表一个被广为诟病的问题：打开表的行为。
 
 ### 分区策略
 
-每当第一次访问一个分区表的时候，MySQL 需要把所有的分区都访问一遍。**一个典型的报错情况是这样的：**如果一个分区表的分区很多，比如超过了 1000 个，而 MySQL 启动的时候，open_files_limit 参数使用的是默认值 1024，那么就会在访问这个表的时候，由于需要打开所有的文件，导致打开表文件的个数超过了上限而报错。
+每当第一次访问一个分区表的时候，MySQL 需要把所有的分区都访问一遍。**一个典型的报错情况是这样的**：如果一个分区表的分区很多，比如超过了 1000 个，而 MySQL 启动的时候，`open_files_limit` 参数使用的是默认值 1024，那么就会在访问这个表的时候，由于需要打开所有的文件，导致打开表文件的个数超过了上限而报错。
 
 下图是创建的一个包含了很多分区的表 t_myisam，执行一条插入语句后报错的情况。
 ![image](https://mail.wangkekai.cn/41B5A6FD-5852-42BD-AD90-513E1068A713.png)
@@ -4485,7 +4487,7 @@ insert into t values('2017-4-1',1),('2018-4-1',1);
 
 MyISAM 分区表使用的分区策略，**我们称为通用分区策略（generic partitioning）**，每次访问分区都由 server 层控制。通用分区策略，是 MySQL 一开始支持分区表的时候就存在的代码，在文件管理、表管理的实现上很粗糙，因此有比较严重的性能问题。
 
-**从 MySQL 5.7.9 开始，InnoDB 引擎引入了本地分区策略（native partitioning）。**这个策略是在 InnoDB 内部自己管理打开分区的行为。  
+**从 MySQL 5.7.9 开始，InnoDB 引擎引入了本地分区策略（native partitioning）**。这个策略是在 InnoDB 内部自己管理打开分区的行为。  
 MySQL 从 5.7.17 开始，将 MyISAM 分区表标记为即将弃用 (deprecated)，意思是“从这个版本开始不建议这么使用，请使用替代方案。在将来的版本中会废弃这个功能”。  
 从 MySQL 8.0 版本开始，就不允许创建 MyISAM 分区表了，只允许创建已经实现了本地分区策略的引擎。目前来看，只有 InnoDB 和 NDB 这两个引擎支持了本地分区策略。
 
@@ -4495,10 +4497,10 @@ MySQL 从 5.7.17 开始，将 MyISAM 分区表标记为即将弃用 (deprecated)
 
 下面两图所示，分别是这个例子的操作序列和执行结果图。
 ![image](https://mail.wangkekai.cn/684EAD76-BCBA-4674-88C3-DA71330CD7CD.png)
-<center>分区表的 MDL 锁 </center>
+*分区表的 MDL 锁*
 
 ![image](https://mail.wangkekai.cn/8AB3BD87-7C40-4886-B80C-9FE00EF519F0.png)
-<center> show processlist 结果</center>
+*show processlist 结果*
 
 可以看到，虽然 session B 只需要操作 p_2107 这个分区，但是由于 session A 持有整个表 t 的 MDL 锁，就导致了 session B 的 alter 语句被堵住。
 
@@ -4512,9 +4514,9 @@ MySQL 从 5.7.17 开始，将 MyISAM 分区表标记为即将弃用 (deprecated)
 
 分区表的一个显而易见的优势是对业务透明，相对于用户分表来说，使用分区表的业务代码更简洁。还有，分区表可以很方便的清理历史数据。
 
-如果一项业务跑的时间足够长，往往就会有根据时间删除历史数据的需求。这时候，按照时间分区的分区表，就可以直接通过 alter table t drop partition …这个语法删掉分区，从而删掉过期的历史数据。
+如果一项业务跑的时间足够长，往往就会有根据时间删除历史数据的需求。这时候，按照时间分区的分区表，就可以直接通过 `alter table t drop partition …` 这个语法删掉分区，从而删掉过期的历史数据。
 
-这个 alter table t drop partition …操作是直接删除分区文件，效果跟 drop 普通表类似。与使用 delete 语句删除数据相比，优势是速度快、对系统影响小。
+这个 `alter table t drop partition …` 操作是直接删除分区文件，效果跟 drop 普通表类似。与使用 delete 语句删除数据相比，优势是速度快、对系统影响小。
 
 ## 44 | 答疑文章（三）：说一说这些好问题
 
@@ -4577,7 +4579,7 @@ select * from a left join b on(a.f1=b.f1) where (a.f2=b.f2);/*Q2*/
 
 **执行流程是这样的**：顺序扫描表 b，每一行用 b.f1 到表 a 中去查，匹配到记录后判断 a.f2=b.f2 是否满足，满足条件的话就作为结果集的一部分返回。
 
-**为什么语句 Q1 和 Q2 这两个查询的执行流程会差距这么大呢？**其实，这是因为优化器基于 Q2 这个查询的语义做了优化。
+**为什么语句 Q1 和 Q2 这两个查询的执行流程会差距这么大呢**？其实，这是因为优化器基于 Q2 这个查询的语义做了优化。
 
 > 在 MySQL 里，NULL 跟任何值执行等值判断和不等值判断的结果，都是 NULL。这里包括， select NULL = NULL 的结果，也是返回 NULL。
 
@@ -4588,9 +4590,9 @@ select * from a left join b on(a.f1=b.f1) where (a.f2=b.f2);/*Q2*/
 
 ![image](https://mail.wangkekai.cn/1614607236719.jpg)
 
-这个例子说明，即使我们在 SQL 语句中写成 left join，执行过程还是有可能不是从左到右连接的。<font color=red>也就是说，使用 left join 时，左边的表不一定是驱动表。</font>
+这个例子说明，即使我们在 SQL 语句中写成 left join，执行过程还是有可能不是从左到右连接的。也就是说，**使用 left join 时，左边的表不一定是驱动表**。
 
-**如果需要 left join 的语义，就不能把被驱动表的字段放在 where 条件里面做等值判断或不等值判断，必须都写在 on 里面。**那如果是 join 语句呢？
+**如果需要 left join 的语义，就不能把被驱动表的字段放在 where 条件里面做等值判断或不等值判断，必须都写在 on 里面**。那如果是 join 语句呢？
 
 ```mysql
 select * from a join b on(a.f1=b.f1) and (a.f2=b.f2); /*Q3*/
@@ -4614,8 +4616,8 @@ select * from a join b where (a.f1=b.f1) and (a.f2=b.f2);
 
 BNL 算法的执行逻辑是：
 
-1. 首先，将驱动表的数据全部读入内存 join_buffer 中，这里 join_buffer 是无序数组；
-2. 然后，顺序遍历被驱动表的所有行，每一行数据都跟 join_buffer 中的数据进行匹配，匹配成功则作为结果集的一部分返回。
+1. 首先，将驱动表的数据全部读入内存 `join_buffer` 中，这里 `join_buffer` 是无序数组；
+2. 然后，顺序遍历被驱动表的所有行，每一行数据都跟 `join_buffer` 中的数据进行匹配，匹配成功则作为结果集的一部分返回。
 
 Simple Nested Loop Join 算法的执行逻辑是：顺序取出驱动表中的每一行数据，到被驱动表去做全表扫描匹配，匹配成功则作为结果集的一部分返回。
 
@@ -4647,7 +4649,7 @@ select a,count(*) from t group by a order by null;
 
 这条语句的逻辑是：按照字段 a 分组，计算每组的 a 出现的次数。在这个结果里，由于做的是聚合计算，相同的 a 只出现一次。
 
-没有了 count(*) 以后，也就是不再需要执行“计算总数”的逻辑时，第一条语句的逻辑就变成是：按照字段 a 做分组，相同的 a 的值只返回一行。而这就是 distinct 的语义，所以不需要执行聚合函数时，distinct 和 group by 这两条语句的语义和执行流程是相同的，因此执行性能也相同。
+没有了 `count(*)` 以后，也就是不再需要执行“计算总数”的逻辑时，第一条语句的逻辑就变成是：按照字段 a 做分组，相同的 a 的值只返回一行。而这就是 distinct 的语义，所以不需要执行聚合函数时，`distinct` 和 `group by` 这两条语句的语义和执行流程是相同的，因此执行性能也相同。
 
 这两条语句的执行流程是下面这样的。
 
@@ -4659,7 +4661,7 @@ select a,count(*) from t group by a order by null;
 
 ### 备库自增主键问题
 
-在 binlog_format=statement 时，语句 A 先获取 id=1，然后语句 B 获取 id=2；接着语句 B 提交，写 binlog，然后语句 A 再写 binlog。这时候，如果 binlog 重放，是不是会发生语句 B 的 id 为 1，而语句 A 的 id 为 2 的不一致情况呢？
+在 `binlog_format=statement` 时，语句 A 先获取 id=1，然后语句 B 获取 id=2；接着语句 B 提交，写 binlog，然后语句 A 再写 binlog。这时候，如果 binlog 重放，是不是会发生语句 B 的 id 为 1，而语句 A 的 id 为 2 的不一致情况呢？
 
 首先，这个问题默认了“自增 id 的生成顺序，和 binlog 的写入顺序可能是不同的”，这个理解是正确的。
 
@@ -4716,7 +4718,7 @@ insert into t values(null);
 
 ### InnoDB 系统自增 row_id
 
-如果你创建的 InnoDB 表没有指定主键，那么 InnoDB 会给你创建一个不可见的，长度为 6 个字节的 row_id。InnoDB 维护了一个全局的 dict_sys.row_id 值，所有无主键的 InnoDB 表，每插入一行数据，都将当前的 dict_sys.row_id 值作为要插入数据的 row_id，然后把 dict_sys.row_id 的值加 1。
+如果你创建的 InnoDB 表没有指定主键，那么 InnoDB 会给你创建一个不可见的，长度为 6 个字节的 `row_id`。InnoDB 维护了一个全局的 `dict_sys.row_id` 值，所有无主键的 InnoDB 表，每插入一行数据，都将当前的 `dict_sys.row_id` 值作为要插入数据的 row_id，然后把 `dict_sys.row_id` 的值加 1。
 
 实际上，在代码实现时 row_id 是一个长度为 8 字节的无符号长整型 (bigint unsigned)。但是，InnoDB 在设计时，给 row_id 留的只是 6 个字节的长度，这样写到数据表中时只放了最后 6 个字节，所以 row_id 能写到数据表中的值，就有两个特征：
 
@@ -4729,10 +4731,10 @@ insert into t values(null);
 
 ### Xid
 
-MySQL 内部维护了一个全局变量 global_query_id，每次执行语句的时候将它赋值给 Query_id，然后给这个变量加 1。如果当前语句是这个事务执行的第一条语句，那么 MySQL 还会同时把 Query_id 赋值给这个事务的 Xid。  
+MySQL 内部维护了一个全局变量 `global_query_id`，每次执行语句的时候将它赋值给 Query_id，然后给这个变量加 1。如果当前语句是这个事务执行的第一条语句，那么 MySQL 还会同时把 Query_id 赋值给这个事务的 Xid。  
 而 global_query_id 是一个纯内存变量，重启之后就清零了。所以你就知道了，在同一个数据库实例中，不同事务的 Xid 也是有可能相同的。
 
-但是 MySQL 重启之后会重新生成新的 binlog 文件，这就保证了，同一个 binlog 文件里，Xid 一定是惟一的。
+*但是 MySQL 重启之后会重新生成新的 binlog 文件，这就保证了，同一个 binlog 文件里，Xid 一定是惟一的*。
 
 虽然 MySQL 重启不会导致同一个 binlog 里面出现两个相同的 Xid，但是如果 global_query_id 达到上限后，就会继续从 0 开始计数。从理论上讲，还是就会出现同一个 binlog 里面出现相同 Xid 的场景。
 
@@ -4746,7 +4748,7 @@ MySQL 内部维护了一个全局变量 global_query_id，每次执行语句的�
 
 Xid 是由 server 层维护的。InnoDB 内部使用 Xid，就是为了能够在 InnoDB 事务和 server 之间做关联。但是，InnoDB 自己的 trx_id，是另外维护的。
 
-InnoDB 内部维护了一个 max_trx_id 全局变量，每次需要申请一个新的 trx_id 时，就获得 max_trx_id 的当前值，然后并将 max_trx_id 加 1。
+InnoDB 内部维护了一个 `max_trx_id` 全局变量，每次需要申请一个新的 `trx_id` 时，就获得 `max_trx_id` 的当前值，然后并将 `max_trx_id` 加 1。
 
 **InnoDB 数据可见性的核心思想是**：每一行数据都记录了更新它的 trx_id，当一个事务读到一行数据的时候，判断这个数据是否可见的方法，就是通过事务的一致性视图与这行数据的 trx_id 做对比。
 
