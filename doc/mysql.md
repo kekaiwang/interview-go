@@ -66,7 +66,7 @@ select * from T where ID = 10;
 
 在数据库的慢查询日志中看到一个 `rows_examined` 的字段，**表示这个语句执行过程中扫描了多少行**。这个值就是在执行器每次调用引擎获取数据行的时候累加的。
 
-## 2 | SQL 更新语句的执行过程？
+## 2 | SQL 更新语句的执行过程及对应点
 
 ### 2.1 执行过程简介
 
@@ -204,6 +204,132 @@ InnoDB 每次写入的日志都有一个序号，当前写入的序号跟 checkp
 ##### 如果 redo log 设置太小，会怎么样？
 
 每次事务提交都要写 redo log，如果设置太小，很快就会被写满，也就是下面这个图的状态，这个“环”将很快被写满，write pos 一直追着 CP。看到的现象就**是磁盘压力很小，但是数据库出现间歇性的性能下跌**。
+
+### 2.3 Mysql 是怎么保证数据不丢的
+
+#### binlog 的写入机制
+
+binlog 的写入逻辑比较简单：事务执行过程中，先把日志写到 binlog cache，事务提交的时候，再把 binlog cache 写到 binlog 文件中。
+
+一个事务的 binlog 是不能被拆开的，因此不论这个事务多大，也要确保一次性写入。这就涉及到了 binlog cache 的保存问题。
+
+系统给 binlog cache 分配了一片内存，每个线程一个，参数 `binlog_cache_size` 用于控制单个线程内 binlog cache 所占内存的大小。**如果超过了这个参数规定的大小，就要暂存到磁盘**。
+
+事务提交的时候，执行器把 binlog cache 里的完整事务写入到 binlog 中，并清空 binlog cache。状态如下图。
+![image](https://mail.wangkekai.cn/224F7159-52BB-486B-BA0F-94BF7640E9FA.png)
+可以看到，每个线程有自己 binlog cache，但是共用同一份 binlog 文件。
+
+- 图中的 write，指的就是指把日志写入到文件系统的 page cache，并没有把数据持久化到磁盘，所以速度比较快。
+- 图中的 fsync，才是将数据持久化到磁盘的操作。一般情况下，我们认为 fsync 才占磁盘的 IOPS。
+
+**write 和 fsync 的时机，是由参数 sync_binlog 控制的**：
+
+1. **sync_binlog=0** 的时候，表示每次提交事务都只 write，不 fsync；
+2. **sync_binlog=1** 的时候，表示每次提交事务都会执行 fsync；
+3. **sync_binlog=N(N>1)** 的时候，表示每次提交事务都 write，但累积 N 个事务后才 fsync。
+
+ > 将 sync_binlog 设置为 N，对应的风险是：如果主机发生异常重启，会丢失最近 N 个事务的 binlog 日志。
+
+#### redo log 的写入机制
+
+ > 事务在执行过程中，生成的 redo log 是要先写到 `redo log buffer` 的。
+
+ ![image](https://mail.wangkekai.cn/30FE2B24-B430-45FA-8B9F-4E50EFB98E14.png)
+ redo log 三种存储状态：
+
+1. **存在 redo log buffer 中**，物理上是在 MySQL 进程内存中，就是图中的红色部分；
+2. **写到磁盘 (write)**，但是没有持久化（fsync)，物理上是在文件系统的 page cache 里面，也就是图中的黄色部分；
+3. **持久化到磁盘**，对应的是 hard disk，也就是图中的绿色部分。
+
+>日志写到 redo log buffer 是很快的，wirte 到 page cache 也差不多，但是持久化到磁盘的速度就慢多了。
+
+**为了控制 redo log 的写入策略，InnoDB 提供了 innodb_flush_log_at_trx_commit 参数**，它有三种可能取值：
+
+1. 设置为 0 的时候，表示每次事务提交时都只是把 redo log 留在 redo log buffer 中 ;
+2. 设置为 1 的时候，表示每次事务提交时都将 redo log 直接持久化到磁盘；
+3. 设置为 2 的时候，表示每次事务提交时都只是把 redo log 写到 page cache。
+
+> InnoDB 有一个后台线程，每隔 1 秒，就会把 redo log buffer 中的日志，调用 write 写到文件系统的 page cache，然后调用 fsync 持久化到磁盘。
+
+注意，**事务执行中间过程的 redo log 也是直接写在 redo log buffer 中的，这些 redo log 也会被后台线程一起持久化到磁盘**。也就是说，一个没有提交的事务的 redo log，也是可能已经持久化到磁盘的。
+
+实际上，除了后台线程每秒一次的轮询操作外，还有两种场景会让一个没有提交的事务的 redo log 写入到磁盘中。
+
+- **一种是，redo log buffer 占用的空间即将达到 innodb_log_buffer_size 一半的时候，后台线程会主动写盘**。注意，由于这个事务并没有提交，所以这个写盘动作只是 write，而没有调用 fsync，也就是只留在了文件系统的 page cache。
+
+- **另一种是，并行的事务提交的时候，顺带将这个事务的 redo log buffer 持久化到磁盘**。假设一个事务 A 执行到一半，已经写了一些 redo log 到 buffer 中，这时候有另外一个线程的事务 B 提交，如果 innodb_flush_log_at_trx_commit 设置的是 1，那么按照这个参数的逻辑，事务 B 要把 redo log buffer 里的日志全部持久化到磁盘。这时候，就会带上事务 A 在 redo log buffer 里的日志一起持久化到磁盘。
+
+> _两阶段提交时序上 redo log 先 prepare， 再写 binlog，最后再把 redo log commit_。
+
+如果把 innodb_flush_log_at_trx_commit 设置成 1，那么 redo log 在 prepare 阶段就要持久化一次，**因为有一个崩溃恢复逻辑是要依赖于 prepare 的 redo log**，再加上 binlog 来恢复的。
+
+每秒一次后台轮询刷盘，再加上崩溃恢复这个逻辑，InnoDB 就认为 redo log 在 commit 的时候就不需要 fsync 了，只会 write 到文件系统的 page cache 中就够了。
+
+通常我们说 **MySQL 的“双 1”配置**，指的就是 `sync_binlog` 和 `innodb_flush_log_at_trx_commit` 都设置成 1。也就是说，**一个事务完整提交前，需要等待两次刷盘，一次是 redo log（prepare 阶段），一次是 binlog**。
+
+这时候，你可能有一个疑问，这意味着我从 MySQL 看到的 TPS 是每秒两万的话，每秒就会写四万次磁盘。但是，我用工具测试出来，磁盘能力也就两万左右，怎么能实现两万的 TPS？就要用到**组提交（group commit）机制**了。
+
+**日志逻辑序列号（log sequence number，LSN）**.
+
+> LSN(log sequence number) 是单调递增的，用来对应 redo log 的一个个写入点。每次写入长度为 length 的 redo log， LSN 的值就会加上 length。
+
+![image](https://mail.wangkekai.cn/F96DFDD9-0D76-402B-AC66-1A50656B9C6F.png)
+
+1. trx1 是第一个到达的，会被选为这组的 leader；
+2. 等 trx1 要开始写盘的时候，这个组里面已经有了三个事务，这时候 LSN 也变成了 160；
+3. trx1 去写盘的时候，带的就是 LSN=160，因此等 trx1 返回时，所有 LSN 小于等于 160 的 redo log，都已经被持久化到磁盘；
+4. 这时候 trx2 和 trx3 就可以直接返回了。
+
+> 一次组提交里面，组员越多，节约磁盘 IOPS 的效果越好。但如果只有单线程压测，那就只能老老实实地一个事务对应一次持久化操作了。
+
+在并发更新场景下，第一个事务写完 redo log buffer 以后，接下来这个 fsync 越晚调用，组员可能越多，节约 IOPS 的效果就越好。
+
+MySQL 为了让组提交的效果更好，把 redo log 做 fsync 的时间拖到了步骤 1 之后。也就是说，上面的图变成了这样：
+![image](https://mail.wangkekai.cn/F7B18FDE-9DA8-474F-8E67-00F8C82FFA08.png)
+这么一来，binlog 也可以组提交了。在执行第 4 步把 binlog fsync 到磁盘时，如果有多个事务的 binlog 已经写完了，也是一起持久化的，这样也可以减少 IOPS 的消耗。
+
+不过通常情况下第 3 步执行得会很快，所以 binlog 的 write 和 fsync 间的间隔时间短，导致能集合到一起持久化的 binlog 比较少，因此 binlog 的组提交的效果通常不如 redo log 的效果那么好。
+
+如果你想提升 binlog 组提交的效果，可以通过设置 binlog_group_commit_sync_delay 和 binlog_group_commit_sync_no_delay_count 来实现。
+
+1. **binlog_group_commit_sync_delay 参数**，表示延迟多少微秒后才调用 fsync;
+2. **binlog_group_commit_sync_no_delay_count 参数**，表示累积多少次以后才调用 fsync。
+
+> 这两个条件是或的关系，也就是说只要有一个满足条件就会调用 fsync。
+
+当 binlog_group_commit_sync_delay 设置为 0 的时候，binlog_group_commit_sync_no_delay_count 也无效了。
+
+**WAL 机制主要得益于两个方面：**
+
+1. redo log 和 binlog 都是顺序写，磁盘的顺序写比随机写速度要快；
+2. 组提交机制，可以大幅度降低磁盘的 IOPS 消耗。
+
+**如果你的 MySQL 现在出现了性能瓶颈，而且瓶颈在 IO 上，可以通过哪些方法来提升性能呢？**
+
+1. 设置 `binlog_group_commit_sync_delay` 和 `binlog_group_commit_sync_no_delay_count` 参数，减少 binlog 的写盘次数。这个方法是基于“额外的故意等待”来实现的，因此可能会增加语句的响应时间，但没有丢失数据的风险。
+2. 将 `sync_binlog` 设置为大于 1 的值（比较常见是 100~1000）。这样做的风险是，主机掉电时会丢 binlog 日志。
+3. 将 `innodb_flush_log_at_trx_commit` 设置为 2。这样做的风险是，主机掉电的时候会丢数据。
+
+**Q1:** 执行一个 update 语句以后，我再去执行 hexdump 命令直接查看 ibd 文件内容，为什么没有看到数据有改变呢？  
+**A1:** 这可能是因为 WAL 机制的原因。update 语句执行完成后，InnoDB 只保证写完了 redo log、内存，可能还没来得及将数据写到磁盘
+
+**Q2:** 为什么 binlog cache 是每个线程自己维护的，而 redo log buffer 是全局共用的？  
+**A2:** MySQL 这么设计的主要原因是，binlog 是不能“被打断的”。一个事务的 binlog 必须连续写，因此要整个事务完成后，再一起写到文件里。
+
+而 redo log 并没有这个要求，中间有生成的日志可以写到 redo log buffer 中。redo log buffer 中的内容还能“搭便车”，其他事务提交的时候可以被一起写到磁盘中。
+
+**Q3:** 事务执行期间，还没到提交阶段，如果发生 crash 的话，redo log 肯定丢了，这会不会导致主备不一致呢？  
+**A3:** 不会。因为这时候 binlog 也还在 binlog cache 里，没发给备库。crash 以后 redo log 和 binlog 都没有了，从业务角度看这个事务也没有提交，所以数据是一致的。
+
+**Q4:** 如果 binlog 写完盘以后发生 crash，这时候还没给客户端答复就重启了。等客户端再重连进来，发现事务已经提交成功了，这是不是 bug？  
+**A4:** 不是。
+你可以设想一下更极端的情况，整个事务都提交成功了，redo log commit 完成了，备库也收到 binlog 并执行了。但是主库和客户端网络断开了，导致事务成功的包返回不回去，这时候客户端也会收到“网络断开”的异常。这种也只能算是事务成功的，不能认为是 bug。
+
+**实际上数据库的 crash-safe 保证的是：**.
+
+1. 如果客户端收到事务成功的消息，事务就一定持久化了；
+2. 如果客户端收到事务失败（比如主键冲突、回滚等）的消息，事务就一定失败了；
+3. 如果客户端收到“执行异常”的消息，应用需要重连后通过查询当前状态来继续后续的逻辑。此时数据库只需要保证内部（数据和日志之间，主库和备库之间）一致就可以了。
 
 ## 3 | 事务
 
@@ -1544,7 +1670,7 @@ select * from trade_detail  where CONVERT(traideid USING utf8mb4)=$L2.tradeid.va
 
 第二个例子是隐式类型转换，第三个例子是隐式字符编码转换
 
-## 22 | MySQL有哪些“饮鸩止渴”提高性能的方法？
+## 11 | MySQL有哪些临时提高性能的方法？
 
 ### 短连接风暴
 
@@ -1552,9 +1678,9 @@ select * from trade_detail  where CONVERT(traideid USING utf8mb4)=$L2.tradeid.va
 
 #### 第一种方法：先处理掉那些占着连接但是不工作的线程
 
-> max_connections 的计算，不是看谁在 running，是只要连着就占用一个计数位置。
+> max_connections 的计算，不是看谁在 running，是只要连着就占用一个计数位置。设置 `wait_timeout` 参数表示的是，一个线程空闲 `wait_timeout` 这么多秒之后，就会被 MySQL 直接断开连接。
 
-要看事务具体状态的话，你可以查 information_schema 库的 innodb_trx 表。
+show processlist 查看两个会话都是 Sleep 状态。要看事务具体状态的话，你可以查 information_schema 库的 innodb_trx 表。
 
 从服务端断开连接使用的是 kill connection + id 的命令， 一个客户端处于 sleep 状态时，它的连接被服务端主动断开后，这个客户端并不会马上知道。直到客户端在发起下一个请求的时候，才会收到这样的报错“ERROR 2013 (HY000): Lost connection to MySQL server during query”。
 
@@ -1562,11 +1688,11 @@ select * from trade_detail  where CONVERT(traideid USING utf8mb4)=$L2.tradeid.va
 
 #### 第二种方法：减少连接过程的消耗
 
-有的业务代码会在短时间内先大量申请数据库连接做备用，如果现在数据库确认是被连接行为打挂了，那么一种可能的做法，是==让数据库跳过权限验证阶段==。
+有的业务代码会在短时间内先大量申请数据库连接做备用，如果现在数据库确认是被连接行为打挂了，那么一种可能的做法，是**让数据库跳过权限验证阶段**。
 
 **跳过权限验证的方法是**：重启数据库，并使用 `–skip-grant-tables` 参数启动。这样，整个 MySQL 会跳过所有的权限验证阶段，包括连接过程和语句执行过程在内。
 
-> 在 MySQL 8.0 版本里，如果你启用 –skip-grant-tables 参数，MySQL 会默认把 --skip-networking 参数打开，表示这时候数据库只能被本地的客户端连接。
+> 在 MySQL 8.0 版本里，如果你启用 `–skip-grant-tables` 参数，MySQL 会默认把 `--skip-networking` 参数打开，表示这时候数据库只能被本地的客户端连接。
 
 ### 慢查询性能问题
 
@@ -1576,13 +1702,24 @@ select * from trade_detail  where CONVERT(traideid USING utf8mb4)=$L2.tradeid.va
 2. **SQL 语句没写好**；
 3. **MySQL 选错了索引**。
 
-#### 导致慢查询的第一种可能是，索引没有设计好
+#### 第一种可能，索引没有设计好
 
-1. 在备库 B 上执行 `set sql_log_bin=off`，也就是不写 binlog，然后执行 alter table 语句加上索引；
+1. 在备库 B 上执行 `set sql_log_bin=off`，也就是不写 binlog，然后执行 `alter table` 语句加上索引；
 2. 执行主备切换；
-3. 这时候主库是 B，备库是 A。在 A 上执行 `set sql_log_bin=off`，然后执行 alter table 语句加上索引。
+3. 这时候主库是 B，备库是 A。在 A 上执行 `set sql_log_bin=off`，然后执行 `alter table` 语句加上索引。
 
-#### 导致慢查询的第三种可能，MySQL 选错了索引
+#### 第二种可能，语句没写好
+
+MySQL 5.7 提供了 query_rewrite 功能，可以把输入的一种语句改写成另外一种模式。
+语句被错误地写成了 `select * from t where id + 1 = 10000`，你可以通过下面的方式，增加一个语句改写规则。
+
+```shell
+mysql> insert into query_rewrite.rewrite_rules(pattern, replacement, pattern_database) values ("select * from t where id + 1 = ?", "select * from t where id = ? - 1", "db1");
+ 
+call query_rewrite.flush_rewrite_rules();
+```
+
+#### 第三种可能，MySQL 选错了索引
 
 这时候，应急方案就是给这个语句加上 `force index`。
 
@@ -1594,146 +1731,22 @@ select * from trade_detail  where CONVERT(traideid USING utf8mb4)=$L2.tradeid.va
 
 1. 一种是由全新业务的 bug 导致的。假设你的 DB 运维是比较规范的，也就是说白名单是一个个加的。这种情况下，如果你能够确定业务方会下掉这个功能，只是时间上没那么快，那么就可以从数据库端直接把白名单去掉。
 2. 如果这个新功能使用的是单独的数据库用户，可以用管理员账号把这个用户删掉，然后断开现有连接。这样，这个新功能的连接不成功，由它引发的 QPS 就会变成 0。
-3. 如果这个新增的功能跟主体功能是部署在一起的，那么我们只能通3过处理语句来限制。这时，我们可以使用上面提到的查询重写功能，把压力最大的 SQL 语句直接重写成"select 1"返回。
+3. 如果这个新增的功能跟主体功能是部署在一起的，那么我们只能通过处理语句来限制。这时，我们可以使用上面提到的查询重写功能，把压力最大的 SQL 语句直接重写成"select 1"返回。
 
-## 23 | MySQL是怎么保证数据不丢的？
+## 12 | 主备 - 高可用
 
-### binlog 的写入机制
+### 12.1 MySQL是怎么保证主备一致的？
 
-binlog 的写入逻辑比较简单：事务执行过程中，先把日志写到 binlog cache，事务提交的时候，再把 binlog cache 写到 binlog 文件中。
-
-一个事务的 binlog 是不能被拆开的，因此不论这个事务多大，也要确保一次性写入。这就涉及到了 binlog cache 的保存问题。
-
-系统给 binlog cache 分配了一片内存，每个线程一个，参数 binlog_cache_size 用于控制单个线程内 binlog cache 所占内存的大小。如果超过了这个参数规定的大小，就要暂存到磁盘。
-
-事务提交的时候，执行器把 binlog cache 里的完整事务写入到 binlog 中，并清空 binlog cache。状态如下图所示。
-![image](https://mail.wangkekai.cn/224F7159-52BB-486B-BA0F-94BF7640E9FA.png)
-可以看到，每个线程有自己 binlog cache，但是共用同一份 binlog 文件。
-
-- 图中的 write，指的就是指把日志写入到文件系统的 page cache，并没有把数据持久化到磁盘，所以速度比较快。
-- 图中的 fsync，才是将数据持久化到磁盘的操作。一般情况下，我们认为 fsync 才占磁盘的 IOPS。
-
-**write 和 fsync 的时机，是由参数 sync_binlog 控制的**：
-
-1. **sync_binlog=0** 的时候，表示每次提交事务都只 write，不 fsync；
-2. **sync_binlog=1** 的时候，表示每次提交事务都会执行 fsync；
-3. **sync_binlog=N(N>1)** 的时候，表示每次提交事务都 write，但累积 N 个事务后才 fsync。
-
- > 将 sync_binlog 设置为 N，对应的风险是：如果主机发生异常重启，会丢失最近 N 个事务的 binlog 日志。
-
-### redo log 的写入机制
-
- > 事务在执行过程中，生成的 redo log 是要先写到 redo log buffer 的。
-
- ![image](https://mail.wangkekai.cn/30FE2B24-B430-45FA-8B9F-4E50EFB98E14.png)
- redo log 三种存储状态：
-
-1. **存在 redo log buffer 中**，物理上是在 MySQL 进程内存中，就是图中的红色部分；
-1. **写到磁盘 (write)**，但是没有持久化（fsync)，物理上是在文件系统的 page cache 里面，也就是图中的黄色部分；
-1. **持久化到磁盘**，对应的是 hard disk，也就是图中的绿色部分。
-
->日志写到 redo log buffer 是很快的，wirte 到 page cache 也差不多，但是持久化到磁盘的速度就慢多了。
-
-**为了控制 redo log 的写入策略，InnoDB 提供了 innodb_flush_log_at_trx_commit 参数**，它有三种可能取值：
-
-1. 设置为 0 的时候，表示每次事务提交时都只是把 redo log 留在 redo log buffer 中 ;
-2. 设置为 1 的时候，表示每次事务提交时都将 redo log 直接持久化到磁盘；
-3. 设置为 2 的时候，表示每次事务提交时都只是把 redo log 写到 page cache。
-
-> InnoDB 有一个后台线程，每隔 1 秒，就会把 redo log buffer 中的日志，调用 write 写到文件系统的 page cache，然后调用 fsync 持久化到磁盘。
->
-> 注意，**事务执行中间过程的 redo log 也是直接写在 redo log buffer 中的，这些 redo log 也会被后台线程一起持久化到磁盘**。也就是说，一个没有提交的事务的 redo log，也是可能已经持久化到磁盘的。
-
-实际上，除了后台线程每秒一次的轮询操作外，还有两种场景会让一个没有提交的事务的 redo log 写入到磁盘中。
-
-- **一种是，redo log buffer 占用的空间即将达到 innodb_log_buffer_size 一半的时候，后台线程会主动写盘**。注意，由于这个事务并没有提交，所以这个写盘动作只是 write，而没有调用 fsync，也就是只留在了文件系统的 page cache。
-
-- **另一种是，并行的事务提交的时候，顺带将这个事务的 redo log buffer 持久化到磁盘**。假设一个事务 A 执行到一半，已经写了一些 redo log 到 buffer 中，这时候有另外一个线程的事务 B 提交，如果 innodb_flush_log_at_trx_commit 设置的是 1，那么按照这个参数的逻辑，事务 B 要把 redo log buffer 里的日志全部持久化到磁盘。这时候，就会带上事务 A 在 redo log buffer 里的日志一起持久化到磁盘。
-
-> _两阶段提交时序上 redo log 先 prepare， 再写 binlog，最后再把 redo log commit_。
-
-如果把 innodb_flush_log_at_trx_commit 设置成 1，那么 redo log 在 prepare 阶段就要持久化一次，因为有一个崩溃恢复逻辑是要依赖于 prepare 的 redo log，再加上 binlog 来恢复的。
-
-每秒一次后台轮询刷盘，再加上崩溃恢复这个逻辑，InnoDB 就认为 redo log 在 commit 的时候就不需要 fsync 了，只会 write 到文件系统的 page cache 中就够了。
-
-通常我们说 ==MySQL 的“双 1”配置==，指的就是 `sync_binlog` 和 `innodb_flush_log_at_trx_commit` 都设置成 1。也就是说，**一个事务完整提交前，需要等待两次刷盘，一次是 redo log（prepare 阶段），一次是 binlog**。
-
-这时候，你可能有一个疑问，这意味着我从 MySQL 看到的 TPS 是每秒两万的话，每秒就会写四万次磁盘。但是，我用工具测试出来，磁盘能力也就两万左右，怎么能实现两万的 TPS？
-
-### 日志逻辑序列号（log sequence number，LSN）
-
-> LSN 是单调递增的，用来对应 redo log 的一个个写入点。每次写入长度为 length 的 redo log， LSN 的值就会加上 length。
-
-![image](https://mail.wangkekai.cn/F96DFDD9-0D76-402B-AC66-1A50656B9C6F.png)
-
-1. trx1 是第一个到达的，会被选为这组的 leader；
-2. 等 trx1 要开始写盘的时候，这个组里面已经有了三个事务，这时候 LSN 也变成了 160；
-3. trx1 去写盘的时候，带的就是 LSN=160，因此等 trx1 返回时，所有 LSN 小于等于 160 的 redo log，都已经被持久化到磁盘；
-4. 这时候 trx2 和 trx3 就可以直接返回了。
-
-> 一次组提交里面，组员越多，节约磁盘 IOPS 的效果越好。但如果只有单线程压测，那就只能老老实实地一个事务对应一次持久化操作了。
-
-在并发更新场景下，第一个事务写完 redo log buffer 以后，接下来这个 fsync 越晚调用，组员可能越多，节约 IOPS 的效果就越好。
-
-MySQL 为了让组提交的效果更好，把 redo log 做 fsync 的时间拖到了步骤 1 之后。也就是说，上面的图变成了这样：
-![image](https://mail.wangkekai.cn/F7B18FDE-9DA8-474F-8E67-00F8C82FFA08.png)
-这么一来，binlog 也可以组提交了。在执行第 4 步把 binlog fsync 到磁盘时，如果有多个事务的 binlog 已经写完了，也是一起持久化的，这样也可以减少 IOPS 的消耗。
-
-不过通常情况下第 3 步执行得会很快，所以 binlog 的 write 和 fsync 间的间隔时间短，导致能集合到一起持久化的 binlog 比较少，因此 binlog 的组提交的效果通常不如 redo log 的效果那么好。
-
-如果你想提升 binlog 组提交的效果，可以通过设置 binlog_group_commit_sync_delay 和 binlog_group_commit_sync_no_delay_count 来实现。
-
-1. **binlog_group_commit_sync_delay 参数**，表示延迟多少微秒后才调用 fsync;
-2. **binlog_group_commit_sync_no_delay_count 参数**，表示累积多少次以后才调用 fsync。
-
-> 这两个条件是或的关系，也就是说只要有一个满足条件就会调用 fsync。
-
-当 binlog_group_commit_sync_delay 设置为 0 的时候，binlog_group_commit_sync_no_delay_count 也无效了。
-
-**WAL 机制主要得益于两个方面：**
-
-1. redo log 和 binlog 都是顺序写，磁盘的顺序写比随机写速度要快；
-2. 组提交机制，可以大幅度降低磁盘的 IOPS 消耗。
-
-**如果你的 MySQL 现在出现了性能瓶颈，而且瓶颈在 IO 上，可以通过哪些方法来提升性能呢？**
-
-1. 设置 binlog_group_commit_sync_delay 和 binlog_group_commit_sync_no_delay_count 参数，减少 binlog 的写盘次数。这个方法是基于“额外的故意等待”来实现的，因此可能会增加语句的响应时间，但没有丢失数据的风险。
-2. 将 sync_binlog 设置为大于 1 的值（比较常见是 100~1000）。这样做的风险是，主机掉电时会丢 binlog 日志。
-3. 将 innodb_flush_log_at_trx_commit 设置为 2。这样做的风险是，主机掉电的时候会丢数据。
-
-**Q1:** 执行一个 update 语句以后，我再去执行 hexdump 命令直接查看 ibd 文件内容，为什么没有看到数据有改变呢？  
-**A1:** 这可能是因为 WAL 机制的原因。update 语句执行完成后，InnoDB 只保证写完了 redo log、内存，可能还没来得及将数据写到磁盘
-
-**Q2:** 为什么 binlog cache 是每个线程自己维护的，而 redo log buffer 是全局共用的？  
-**A2:** MySQL 这么设计的主要原因是，binlog 是不能“被打断的”。一个事务的 binlog 必须连续写，因此要整个事务完成后，再一起写到文件里。
-
-而 redo log 并没有这个要求，中间有生成的日志可以写到 redo log buffer 中。redo log buffer 中的内容还能“搭便车”，其他事务提交的时候可以被一起写到磁盘中。
-
-**Q3:** 事务执行期间，还没到提交阶段，如果发生 crash 的话，redo log 肯定丢了，这会不会导致主备不一致呢？  
-**A3:** 不会。因为这时候 binlog 也还在 binlog cache 里，没发给备库。crash 以后 redo log 和 binlog 都没有了，从业务角度看这个事务也没有提交，所以数据是一致的。
-
-**Q4:** 如果 binlog 写完盘以后发生 crash，这时候还没给客户端答复就重启了。等客户端再重连进来，发现事务已经提交成功了，这是不是 bug？  
-**A4:** 不是。
-你可以设想一下更极端的情况，整个事务都提交成功了，redo log commit 完成了，备库也收到 binlog 并执行了。但是主库和客户端网络断开了，导致事务成功的包返回不回去，这时候客户端也会收到“网络断开”的异常。这种也只能算是事务成功的，不能认为是 bug。
-
-**实际上数据库的 crash-safe 保证的是：**.
-
-1. 如果客户端收到事务成功的消息，事务就一定持久化了；
-2. 如果客户端收到事务失败（比如主键冲突、回滚等）的消息，事务就一定失败了；
-3. 如果客户端收到“执行异常”的消息，应用需要重连后通过查询当前状态来继续后续的逻辑。此时数据库只需要保证内部（数据和日志之间，主库和备库之间）一致就可以了。
-
-## 24 | MySQL是怎么保证主备一致的？
-
-### MySQL 主备的基本原理
+#### MySQL 主备的基本原理
 
 ![image](https://mail.wangkekai.cn/50E5EF6A-DC3C-4C59-9F2E-0BCE79F87C04.png)
 在状态 1 中，客户端的读写都直接访问节点 A，而节点 B 是 A 的备库，只是将 A 的更新都同步过来，到本地执行。这样可以保持节点 B 和 A 的数据是相同的。
 
-在状态 1 中，虽然节点 B 没有被直接访问，但是我依然建议你把节点 B（也就是备库）设置成只读（readonly）模式。这样做，有以下几个考虑：
+在状态 1 中，虽然节点 B 没有被直接访问，但是依然建议把节点 B（也就是备库）设置成只读（readonly）模式。这样做，有以下几个考虑：
 
-1. 有时候一些运营类的查询语句会被放到备库上去查，设置为只读可以防止误操作；
-2. 防止切换逻辑有 bug，比如切换过程中出现双写，造成主备不一致；
-3. 可以用 readonly 状态，来判断节点的角色。
+1. 有时候一些运营类的查询语句会被放到备库上去查，设置为只读可以防止误操作
+2. 防止切换逻辑有 bug，比如切换过程中出现双写，造成主备不一致
+3. 可以用 readonly 状态，来判断节点的角色
 
 节点 A 到 B 这条线的内部流程是什么样的。下图画出的就是一个 update 语句在节点 A 执行，然后同步到节点 B 的完整流程图。
 ![image](https://mail.wangkekai.cn/DA0B9C7A-BC11-4B57-8518-90474739CE69.png)
@@ -1741,24 +1754,28 @@ MySQL 为了让组提交的效果更好，把 redo log 做 fsync 的时间拖到
 
 _备库 B 跟主库 A 之间维持了一个长连接。主库 A 内部有一个线程，专门用于服务备库 B 的这个长连接_。一个事务日志同步的完整过程是这样的：
 
-1. 在备库 B 上通过 change master 命令，设置主库 A 的 IP、端口、用户名、密码，以及要从哪个位置开始请求 binlog，这个位置包含文件名和日志偏移量。
-2. 在备库 B 上执行 start slave 命令，这时候备库会启动两个线程，就是图中的 io_thread 和 sql_thread。其中 io_thread 负责与主库建立连接。
+1. 在备库 B 上通过 `change master` 命令，设置主库 A 的 IP、端口、用户名、密码，以及要从哪个位置开始请求 binlog，这个位置包含文件名和日志偏移量。
+2. 在备库 B 上执行 `start slave` 命令，这时候备库会启动两个线程，就是图中的 io_thread 和 sql_thread。其中 io_thread 负责与主库建立连接。
 3. 主库 A 校验完用户名、密码后，开始按照备库 B 传过来的位置，从本地读取 binlog，发给 B。
 4. 备库 B 拿到 binlog 后，写到本地文件，称为中转日志（relay log）。
 5. sql_thread 读取中转日志，解析出日志里的命令，并执行。
 
-### binlog 的三种格式对比
+#### binlog 的三种格式对比
 
 一种是 statement，一种是 row，还有一种是 mixed，其实它就是前两种格式的混合。
 
 **当 binlog_format=statement 时，binlog 里面记录的就是 SQL 语句的原文**。
 
+```shell
+show binlog events in 'master.000001';
+```
+
 ![image](https://mail.wangkekai.cn/020B9CD5-4FD4-4D7C-9533-C550138B5806.png)
 
 - 第一行 SET @@SESSION.GTID_NEXT='ANONYMOUS’ 你可以先忽略，后面文章我们会在介绍主备切换的时候再提到；
 - 第二行是一个 BEGIN，跟第四行的 commit 对应，表示中间是一个事务；
-- 第三行就是真实执行的语句了。可以看到，在真实执行的 delete 命令之前，还有一个 “use ‘test’” 命令。这条命令不是我们主动执行的，而是 MySQL 根据当前要操作的表所在的数据库，自行添加的。这样做可以保证日志传到备库去执行的时候，不论当前的工作线程在哪个库里，都能够正确地更新到 test 库的表 t。
-- use 'test’ 命令之后的 delete 语句，就是我们输入的 SQL 原文了。可以看到，binlog “忠实”地记录了 SQL 命令，甚至连注释也一并记录了。
+- 第三行就是真实执行的语句了。在真实执行的 delete 命令之前，还有一个 `use ‘test’` 命令。这条命令不是我们主动执行的，而是 MySQL 根据当前要操作的表所在的数据库，自行添加的。**这样做可以保证日志传到备库去执行的时候，不论当前的工作线程在哪个库里，都能够正确地更新到 test 库的表 t**。
+- use 'test’ 命令之后的 delete 语句，就是我们输入的 SQL 原文了。可以看到，binlog 记录了 SQL 命令，连注释也一并记录了。
 - 最后一行是一个 COMMIT。你可以看到里面写着 xid=61。  
 
 这条 SQL 的执行效果图：
@@ -1766,7 +1783,7 @@ _备库 B 跟主库 A 之间维持了一个长连接。主库 A 内部有一个�
 
 可以看到，运行这条 delete 命令产生了一个 warning，原因是当前 binlog 设置的是 statement 格式，并且语句中有 limit，所以这个命令可能是 unsafe 的。
 
-为什么这么说呢？这是因为 delete 带 limit，很可能会出现主备数据不一致的情况。比如上面这个例子：
+这是因为 delete 带 limit，很可能会出现主备数据不一致的情况。比如上面这个例子：
 
 1. 如果 delete 语句使用的是索引 a，那么会根据索引 a 找到第一个满足条件的行，也就是说删除的是 a=4 这一行；
 2. 但如果使用的是索引 t_modified，那么删除的就是 t_modified='2018-11-09’ 也就是 a=5 这一行。
@@ -1776,9 +1793,12 @@ _备库 B 跟主库 A 之间维持了一个长连接。主库 A 内部有一个�
 **当 binlog_format=row 时**：
 
 ![image](https://mail.wangkekai.cn/7EA0C044-00E4-4FB1-A9F5-690CDC943F8F.png)
-与 statement 格式的 binlog 相比，前后的 BEGIN 和 COMMIT 是一样的。但是，row 格式的 binlog 里没有了 SQL 语句的原文，而是替换成了两个 event：Table_map 和 Delete_rows。
+与 statement 格式的 binlog 相比，前后的 BEGIN 和 COMMIT 是一样的。但是，**row 格式的 binlog 里没有了 SQL 语句的原文，而是替换成了两个 event：Table_map 和 Delete_rows**。
 
-需要借助 mysqlbinlog 工具，用下面这个命令解析和查看 binlog 中的内容。因为图 5 中的信息显示，这个事务的 binlog 是从 8900 这个位置开始的，所以可以用 start-position 参数来指定从这个位置的日志开始解析。
+1. Table_map event，用于说明接下来要操作的表是 test 库的表 t;
+2. Delete_rows event，用于定义删除的行为。
+
+需要借助 mysqlbinlog 工具，用下面这个命令解析和查看 binlog 中的内容。因为上图中的信息显示，这个事务的 binlog 是从 8900 这个位置开始的，所以可以用 `start-position` 参数来指定从这个位置的日志开始解析。
 
 ```mysql
 mysqlbinlog  -vv data/master.000001 --start-position=8900;
@@ -1787,15 +1807,15 @@ mysqlbinlog  -vv data/master.000001 --start-position=8900;
 ![image](https://mail.wangkekai.cn/56233595-B35F-46C4-9618-A7C31BE4536C.png)
 
 - server id 1，表示这个事务是在 server_id=1 的这个库上执行的。
-- 每个 event 都有 CRC32 的值，这是因为我把参数 binlog_checksum 设置成了 CRC32。
-- Table_map event 跟在图 5 中看到的相同，显示了接下来要打开的表，map 到数字 226。现在我们这条 SQL 语句只操作了一张表，如果要操作多张表呢？每个表都有一个对应的 Table_map event、都会 map 到一个单独的数字，用于区分对不同表的操作。
-- 我们在 mysqlbinlog 的命令中，使用了 -vv 参数是为了把内容都解析出来，所以从结果里面可以看到各个字段的值（比如，@1=4、 @2=4 这些值）。
+- 每个 event 都有 CRC32 的值，*这是因为把参数 binlog_checksum 设置成了 CRC32*。
+- Table_map event 跟在上图中看到的相同，显示了接下来要打开的表，map 到数字 226。现在我们这条 SQL 语句只操作了一张表，如果要操作多张表呢？每个表都有一个对应的 Table_map event、都会 map 到一个单独的数字，用于区分对不同表的操作。
+- 我们在 mysqlbinlog 的命令中，**使用了 -vv 参数是为了把内容都解析出来**，所以从结果里面可以看到各个字段的值（比如，@1=4、 @2=4 这些值）。
 - binlog_row_image 的默认配置是 FULL，因此 Delete_event 里面，包含了删掉的行的所有字段的值。如果把 binlog_row_image 设置为 MINIMAL，则只会记录必要的信息，在这个例子里，就是只会记录 id=4 这个信息。
 - 最后的 Xid event，用于表示事务被正确地提交了。
 
-可以看到，当 binlog_format 使用 row 格式的时候，binlog 里面记录了真实删除行的主键 id，这样 binlog 传到备库去的时候，就肯定会删除 id=4 的行，不会有主备删除不同行的问题。
+可以看到，***当 binlog_format 使用 row 格式的时候*，binlog 里面记录了真实删除行的主键 id，这样 binlog 传到备库去的时候，就肯定会删除 id=4 的行，不会有主备删除不同行的问题**。
 
-### 为什么会有 mixed 格式的 binlog？
+#### 为什么会有 mixed 格式的 binlog？
 
 - 因为有些 statement 格式的 binlog 可能会导致主备不一致，所以要使用 row 格式。
 - 但 row 格式的缺点是，很占空间。比如你用一个 delete 语句删掉 10 万行数据，用 statement 的话就是一个 SQL 语句被记录到 binlog 中，占用几十个字节的空间。但如果用 row 格式的 binlog，就要把这 10 万条记录都写到 binlog 中。这样做，不仅会占用更大的空间，同时写 binlog 也要耗费 IO 资源，影响执行速度。
@@ -1819,8 +1839,8 @@ mysql> insert into t values(10,10, now());
 ![image](https://mail.wangkekai.cn/AD600485-C83B-4DF5-82C7-FD8E712C1125.png)
 MySQL 用的居然是 statement 格式。你一定会奇怪，如果这个 binlog 过了 1 分钟才传给备库的话，那主备的数据不就不一致了吗？
 ![image](https://mail.wangkekai.cn/28C35EF8-826A-49F1-BA66-D368408C4164.png)
-**binlog 在记录 event 的时候，多记了一条命令：SET TIMESTAMP=1546103491**。它用 SET TIMESTAMP 命令约定了接下来的 now() 函数的返回时间。  
-因此，不论这个 binlog 是 1 分钟之后被备库执行，还是 3 天后用来恢复这个库的备份，这个 insert 语句插入的行，值都是固定的。**通过这条 SET TIMESTAMP 命令，MySQL 就确保了主备数据的一致性**。
+**binlog 在记录 event 的时候，多记了一条命令：`SET TIMESTAMP=1546103491`**。它用 `SET TIMESTAMP` 命令约定了接下来的 now() 函数的返回时间。  
+因此，不论这个 binlog 是 1 分钟之后被备库执行，还是 3 天后用来恢复这个库的备份，这个 insert 语句插入的行，值都是固定的。**通过这条 `SET TIMESTAMP` 命令，MySQL 就确保了主备数据的一致性**。
 
 我之前看过有人在重放 binlog 数据的时候：用 mysqlbinlog 解析出日志，然后把里面的 statement 语句直接拷贝出来执行。
 这个方法是有风险的。因为有些语句的执行结果是依赖于上下文命令的，直接执行的结果很可能是错误的。
@@ -1830,10 +1850,10 @@ MySQL 用的居然是 statement 格式。你一定会奇怪，如果这个 binlo
 mysqlbinlog master.000001  --start-position=2738 --stop-position=2973 | mysql -h127.0.0.1 -P13000 -u$user -p$pwd;
 ```
 
-### 循环复制问题
+#### 循环复制问题
 
 双 M 结构和 M-S 结构，其实区别只是多了一条线，即：节点 A 和 B 之间总是互为主备关系。这样在切换的时候就不用再修改主备关系。
-> 参数 log_slave_updates 设置为 on，表示备库执行 relay log 后生成 binlog
+> 参数 `log_slave_updates` 设置为 on，表示备库执行 `relay log` 后生成 binlog
 
 如果节点 A 同时是节点 B 的备库，相当于又把节点 B 新生成的 binlog 拿过来执行了一次，然后节点 A 和 B 间，会不断地循环执行这个更新语句，也就是循环复制了。这个要怎么解决呢？
 
@@ -1849,54 +1869,62 @@ mysqlbinlog master.000001  --start-position=2738 --stop-position=2973 | mysql -h
 
 > 什么情况下双 M 结构会出现循环复制?
 
-- 一种场景是，在一个主库更新事务后，用命令 set global server_id=x 修改了 server_id。等日志再传回来的时候，发现 server_id 跟自己的 server_id 不同，就只能执行了。
+- 一种场景是，在一个主库更新事务后，用命令 `set global server_id=x` 修改了 server_id。等日志再传回来的时候，发现 server_id 跟自己的 server_id 不同，就只能执行了。
 - 另一种场景是，有三个节点的时候，如图 7 所示，trx1 是在节点 B 执行的，因此 binlog 上的 server_id 就是 B，binlog 传给节点 A，然后 A 和 A’搭建了双 M 结构，就会出现循环复制。
 
-## 25 | MySQL是怎么保证高可用的？
+### 12.2 MySQL是怎么保证高可用的
 
 ![image](https://mail.wangkekai.cn/01B6B454-D899-47C1-83E5-0C27606629EC.png)
+双 M 的主备切换流程图
 
-### 主备延迟
+#### 主备延迟
 
-同步延迟：
+主备切换可能是一个主动运维动作，比如软件升级、主库所在机器按计划下线等，也可能是被动操作，比如主库所在机器掉电。
+
+**同步延迟**，与数据同步有关的的时间点主要是以下：
 
 1. 主库 A 执行完成一个事务，写入 binlog，我们把这个时刻记为 T1;
 2. 之后传给备库 B，我们把备库 B 接收完这个 binlog 的时刻记为 T2;
 3. 备库 B 执行完成这个事务，我们把这个时刻记为 T3。
 
-> 所谓主备延迟，就是同一个事务，在备库执行完成的时间和主库执行完成的时间之间的差值，也就是 T3-T1。
+**所谓主备延迟**，就是同一个事务，在备库执行完成的时间和主库执行完成的时间之间的差值，也就是 T3-T1。
 
 在备库上执行 `show slave status` 命令，它的返回结果里面会显示 seconds_behind_master，用于表示当前备库延迟了多少秒。
 
-seconds_behind_master 的计算方法是这样的：
+`seconds_behind_master` 的计算方法是这样的：
 
 1. 每个事务的 binlog 里面都有一个时间字段，用于记录主库上写入的时间；
 2. 备库取出当前正在执行的事务的时间字段的值，计算它与当前系统时间的差值，得到 seconds_behind_master。
 
-备库连接到主库的时候，会通过执行 `SELECT UNIX_TIMESTAMP()` 函数来获得当前主库的系统时间。如果这时候发现主库的系统时间与自己不一致，备库在执行 seconds_behind_master 计算的时候会自动扣掉这个差值。
+备库连接到主库的时候，会通过执行 `SELECT UNIX_TIMESTAMP()` 函数来获得当前主库的系统时间。如果这时候发现主库的系统时间与自己不一致，备库在执行 `seconds_behind_master` 计算的时候会自动扣掉这个差值。
 > 主备延迟最直接的表现是，备库消费中转日志（relay log）的速度，比主库生产 binlog 的速度要慢。接下来，我就和你一起分析下，这可能是由哪些原因导致的。
 
-### 主备延迟的来源
+#### 主备延迟的来源
 
-**首先，有些部署条件下，备库所在机器的性能要比主库所在的机器性能差**。
-> 追问 1：但是，做了对称部署以后，还可能会有延迟。这是为什么呢？
+1. **首先，有些部署条件下，备库所在机器的性能要比主库所在的机器性能差**。也就是主备不做对称部署。
+更新请求对 IOPS 的压力，在主库和备库上是无差别的。所以，做这种部署时，一般都会将备库设置为“非双 1”的模式。
 
-**第二种常见的可能了，即备库的压力大**。由于主库直接影响业务，大家使用起来会比较克制，反而忽视了备库的压力控制。结果就是，_备库上的查询耗费了大量的 CPU 资源，影响了同步速度，造成主备延迟_。这种情况般可以这么处理：
+    > 追问 1：但是，做了对称部署以后，还可能会有延迟。这是为什么呢？
 
-1. 一主多从。除了备库外，可以多接几个从库，让这些从库来分担读的压力。
-2. 通过 binlog 输出到外部系统，比如 Hadoop 这类系统，让外部系统提供统计类查询的能力。
+2. **这就是第二种常见的可能，即备库的压力大**。由于主库直接影响业务，大家使用起来会比较克制，反而忽视了备库的压力控制。结果就是，_备库上的查询耗费了大量的 CPU 资源，影响了同步速度，造成主备延迟_。这种情况般可以这么处理：
 
-> 追问 2：采用了一主多从，保证备库的压力不会超过主库，还有什么情况可能导致主备延迟吗？
+    1. 一主多从。除了备库外，可以多接几个从库，让这些从库来分担读的压力。
+      作为数据库系统，还必须保证有定期全量备份的能力。而从库，就很适合用来做备份。
+    2. 通过 binlog 输出到外部系统，比如 Hadoop 这类系统，让外部系统提供统计类查询的能力。
 
-**这就是第三种可能了，即大事务**。
-大事务这种情况很好理解。因为主库上必须等事务执行完成才会写入 binlog，再传给备库。所以，如果一个主库上的语句执行 10 分钟，那这个事务很可能就会导致从库延迟 10 分钟。
-> 不要一次性地用 delete 语句删除太多数据。其实，这就是一个典型的大事务场景。
+    > 追问 2：采用了一主多从，保证备库的压力不会超过主库，还有什么情况可能导致主备延迟吗？
 
-**另一种典型的大事务场景，就是大表 DDL**。
-> 追问 3：如果主库上也不做大事务了，还有什么原因会导致主备延迟吗？
-造成主备延迟还有一个大方向的原因，就是**备库的并行复制能力**。
+3. **这就是第三种可能了，即大事务**。
+    大事务这种情况很好理解。因为主库上必须等事务执行完成才会写入 binlog，再传给备库。所以，如果一个主库上的语句执行 10 分钟，那这个事务很可能就会导致从库延迟 10 分钟。
+    > 不要一次性地用 delete 语句删除太多数据。其实，这就是一个典型的大事务场景。
 
-### 可靠性优先策略
+    **另一种典型的大事务场景，就是大表 DDL**。
+
+    > 追问 3：如果主库上也不做大事务了，还有什么原因会导致主备延迟吗？
+
+4. 造成主备延迟还有一个大方向的原因，就是**备库的并行复制能力**。
+
+#### 可靠性优先策略
 
 在双 M 结构下，从状态 1 到状态 2 切换的详细过程是这样的：
 
@@ -1912,11 +1940,11 @@ seconds_behind_master 的计算方法是这样的：
 
 在这个不可用状态中，比较耗费时间的是步骤 3，可能需要耗费好几秒的时间。这也是为什么需要在步骤 1 先做判断，确保 seconds_behind_master 的值足够小。
 
-试想如果一开始主备延迟就长达 30 分钟，而不先做判断直接切换的话，系统的不可用时间就会长达 30 分钟，这种情况一般业务都是不可接受的。
+如果一开始主备延迟就长达 30 分钟，而不先做判断直接切换的话，系统的不可用时间就会长达 30 分钟，这种情况一般业务都是不可接受的。
 
 当然，系统的不可用时间，是由这个数据可靠性优先的策略决定的。你也可以选择可用性优先的策略，来把这个不可用时间几乎降为 0。
 
-### 可用性优先策略
+#### 可用性优先策略
 
 ![image](https://mail.wangkekai.cn/B87DC952-DDB8-49EF-ACFE-C68820B52A34.png)
 **上图是可用性优先策略，且 binlog_format=mixed 时的切换流程和数据结果**
@@ -1953,11 +1981,11 @@ seconds_behind_master 的计算方法是这样的：
 
 在满足数据可靠性的前提下，MySQL 高可用系统的可用性，是依赖于主备延迟的。延迟的时间越小，在主库故障的时候，服务恢复需要的时间就越短，可用性就越高。
 
-## 26 | 备库为什么会延迟好几个小时？
+### 12.3 备库延迟的原因 并行复制策略
 
 ![image](https://mail.wangkekai.cn/CF599434-F7E3-4769-8DD9-45E03BB2E471.png)
 **主备流程图**  
-*在主库上，影响并发度的原因就是各种锁了*。由于 InnoDB 引擎支持行锁，除了所有并发事务都在更新同一行（热点行）这种极端场景外，它对业务并发度的支持还是很友好的。所以，你在性能测试的时候会发现，并发压测线程 32 就比单线程时，总体吞吐量高。
+*在主库上，影响并发度的原因就是各种锁了*。由于 InnoDB 引擎支持行锁，除了所有并发事务都在更新同一行（热点行）这种极端场景外，它对业务并发度的支持还是很友好的。所以，在性能测试的时候会发现，并发压测线程 32 就比单线程时，总体吞吐量高。
 
 而日志在备库上的执行，就是图中备库上 sql_thread 更新数据 (DATA) 的逻辑。如果是用单线程的话，就会导致备库应用日志不够快，造成主备延迟。
 
@@ -1965,7 +1993,8 @@ seconds_behind_master 的计算方法是这样的：
 ![image](https://mail.wangkekai.cn/A6AC159B-5E50-440A-BD75-06F225A8498B.png)
 **多线程模型**
 
-coordinator 就是原来的 sql_thread, 不过现在它不再直接更新数据了，只负责读取中转日志和分发事务。真正更新日志的，变成了 worker 线程。而 work 线程的个数，就是由参数 slave_parallel_workers 决定的。根据我的经验，把这个值设置为 8~16 之间最好（32 核物理机的情况），毕竟备库还有可能要提供读查询，不能把 CPU 都吃光了。
+`coordinator` 就是原来的 `sql_thread`, 不过现在它不再直接更新数据了，只负责读取中转日志和分发事务。真正更新日志的，变成了 worker 线程。而 work 线程的个数，就是由参数 `slave_parallel_workers` 决定的。根据我的经验，把这个值设置为 8~16 之间最好（32 核物理机的情况），毕竟备库还有可能要提供读查询，不能把 CPU 都吃光了。
+
 > 先思考一个问题：事务能不能按照轮询的方式分发给各个 worker，也就是第一个事务分给 worker_1，第二个事务发给 worker_2 呢？
 
 其实是不行的。因为，事务被分发给 worker 以后，不同的 worker 就独立执行了。但是，由于 CPU 的调度策略，_很可能第二个事务最终比第一个事务先执行_。而如果这时候刚好这两个事务更新的是同一行，也就意味着，同一行上的两个事务，在主库和备库上的执行顺序相反，会导致主备不一致的问题。
@@ -1974,20 +2003,20 @@ coordinator 就是原来的 sql_thread, 不过现在它不再直接更新数据�
 
 答案是，也不行。举个例子，一个事务更新了表 t1 和表 t2 中的各一行，如果这两条更新语句被分到不同 worker 的话，虽然最终的结果是主备一致的，但如果表 t1 执行完成的瞬间，备库上有一个查询，就会看到这个事务“更新了一半的结果”，破坏了事务逻辑的隔离性。
 
-> 所以，coordinator 在分发的时候，需要满足以下这两个基本要求：
+coordinator 在分发的时候，需要满足以下这两个基本要求：
 
-1. 不能造成更新覆盖。这就要求更新同一行的两个事务，必须被分发到同一个 worker 中。
-2. 同一个事务不能被拆开，必须放到同一个 worker 中。
+1. **不能造成更新覆盖**。这就要求更新同一行的两个事务，必须被分发到同一个 worker 中。
+2. **同一个事务不能被拆开**，必须放到同一个 worker 中。
 
-### MySQL 5.5 版本的并行复制策略
+#### MySQL 5.5 版本的并行复制策略
 
-#### 按表分发策略
+##### 按表分发策略
 
 按表分发事务的基本思路是，如果两个事务更新不同的表，它们就可以并行。因为数据是存储在表里的，所以按表分发，可以保证两个 worker 不会更新同一行。
 ![image](https://mail.wangkekai.cn/5A48BCD2-9344-4ADB-B8FD-64AE80EFE5EB.png)
 **图 3 按表并行复制程模型**
 
-可以看到，每个 worker 线程对应一个 hash 表，用于保存当前正在这个 worker 的“执行队列”里的事务所涉及的表。hash 表的 key 是“库名. 表名”，value 是一个数字，表示队列中有多少个事务修改这个表。
+每个 worker 线程对应一个 hash 表，用于保存当前正在这个 worker 的“执行队列”里的事务所涉及的表。hash 表的 key 是“库名. 表名”，value 是一个数字，表示队列中有多少个事务修改这个表。
 在有事务分配给 worker 时，事务里面涉及的表会被加到对应的 hash 表中。worker 执行完成后，这个表会被从 hash 表中去掉。
 
 > 假设在图中的情况下，coordinator 从中转日志中读入一个新事务 T，这个事务修改的行涉及到表 t1 和 t3。现在我们用事务 T 的分配流程，来看一下分配规则。
@@ -2007,15 +2036,16 @@ coordinator 就是原来的 sql_thread, 不过现在它不再直接更新数据�
 
 这个按表分发的方案，在多个表负载均匀的场景里应用效果很好。但是，如果碰到热点表，比如所有的更新事务都会涉及到某一个表的时候，所有事务都会被分配到同一个 worker 中，就变成单线程复制了。
 
-#### 按行分发策略
+##### 按行分发策略
 
-要解决热点表的并行复制问题，就需要一个按行并行复制的方案。按行复制的核心思路是：如果两个事务没有更新相同的行，它们在备库上可以并行执行。显然，这个模式要求 binlog 格式必须是 row。
+要解决热点表的并行复制问题，就需要一个按行并行复制的方案。按行复制的核心思路是：**如果两个事务没有更新相同的行，它们在备库上可以并行执行**。显然，*这个模式要求 binlog 格式必须是 row*。
 
 按行复制和按表复制的数据结构差不多，也是为每个 worker，分配一个 hash 表。只是要实现按行分发，**这时候的 key，就必须是“库名 + 表名 + 唯一键的值”**。
 
 但是，这个“唯一键”只有主键 id 还是不够的，我们还需要考虑下面这种场景，表 t1 中除了主键，还有唯一索引 a：
 两个事务要更新的行的主键值不同，但是如果它们被分到不同的 worker，就有可能 session B 的语句先执行。这时候 id=1 的行的 a 的值还是 1，就会报唯一键冲突。
-> 因此，基于行的策略，事务 hash 表中还需要考虑唯一键，即 key 应该是“库名 + 表名 + 索引 a 的名字 +a 的值”。
+
+因此，基于行的策略，事务 hash 表中还需要考虑唯一键，**即 key 应该是“库名 + 表名 + 索引 a 的名字 +a 的值”**。
 
 session A | session B
 ---|---
@@ -2046,7 +2076,7 @@ coordinator 在解析这个语句的 binlog 的时候，这个事务的 hash 表
 3. coordinator 直接执行这个事务；
 4. 恢复并行模式。
 
-### MySQL 5.6 版本的并行复制策略
+#### MySQL 5.6 版本的并行复制策略
 
 官方 MySQL5.6 版本，**支持了并行复制，只是支持的粒度是按库并行**。用于决定分发策略的 hash 表里，key 就是数据库名。
 
@@ -2059,9 +2089,9 @@ coordinator 在解析这个语句的 binlog 的时候，这个事务的 hash 表
 
 理论上你可以创建不同的 DB，把相同热度的表均匀分到这些不同的 DB 中，强行使用这个策略。不过据我所知，由于需要特地移动数据，这个策略用得并不多。
 
-### MariaDB 的并行复制策略
+#### MariaDB 的并行复制策略
 
-23 节介绍了 redo log 组提交 (group commit) 优化， 而 MariaDB 的并行复制策略利用的就是这个特性：
+前面说了 redo log 组提交 (group commit) 优化， 而 MariaDB 的并行复制策略利用的就是这个特性：
 
 1. 能够在同一组里提交的事务，一定不会修改同一行；
 2. 主库上可以并行执行的事务，备库上也一定是可以并行执行的。
@@ -2073,7 +2103,7 @@ coordinator 在解析这个语句的 binlog 的时候，这个事务的 hash 表
 3. 传到备库应用的时候，相同 commit_id 的事务分发到多个 worker 执行；
 4. 这一组全部执行完成后，coordinator 再去取下一批。
 
-但是，这个策略有一个问题，它++并没有实现“真正的模拟主库并发度”这个目标++。在主库上，一组事务在 commit 的时候，下一组事务是同时处于“执行中”状态的。
+但是，这个策略有一个问题，它*并没有实现“真正的模拟主库并发度”这个目标*。在主库上，一组事务在 commit 的时候，下一组事务是同时处于“执行中”状态的。
 
 假设了三组事务在主库的执行情况，你可以看到在 trx1、trx2 和 trx3 提交的时候，trx4、trx5 和 trx6 是在执行的。这样，在第一组事务提交完成的时候，下一组事务很快就会进入 commit 状态。如下图：
 ![image](https://mail.wangkekai.cn/CB4BB926-C9D1-4EBE-9731-E5DCBBBC0AC1.png)
@@ -2084,9 +2114,9 @@ coordinator 在解析这个语句的 binlog 的时候，这个事务的 hash 表
 
 另外，这个方案很容易被大事务拖后腿。假设 trx2 是一个超大事务，那么在备库应用的时候，trx1 和 trx3 执行完成后，就只能等 trx2 完全执行完成，下一组才能开始执行。这段时间，只有一个 worker 线程在工作，是对资源的浪费。
 
-### MySQL 5.7 的并行复制策略
+#### MySQL 5.7 的并行复制策略
 
-由参数 slave-parallel-type 来控制并行复制策略：
+由参数 `slave-parallel-type` 来控制并行复制策略：
 
 1. 配置为 DATABASE，表示使用 MySQL 5.6 版本的按库并行策略；
 2. 配置为 LOGICAL_CLOCK，表示的就是类似 MariaDB 的策略。不过，MySQL 5.7 这个策略，针对并行度做了优化。这个优化的思路也很有趣儿。
@@ -2112,13 +2142,13 @@ coordinator 在解析这个语句的 binlog 的时候，这个事务的 hash 表
 
 也就是说，这两个参数，**既可以“故意”让主库提交得慢些，又可以让备库执行得快些**。在 MySQL 5.7 处理备库延迟的时候，可以考虑调整这两个参数值，来达到提升备库复制并发度的目的。
 
-### MySQL 5.7.22 的并行复制策略
+#### MySQL 5.7.22 的并行复制策略
 
-新增了一个参数 binlog-transaction-dependency-tracking，用来控制是否启用这个新策略。这个参数的可选值有以下三种。
+新增了一个参数 `binlog-transaction-dependency-tracking`，用来控制是否启用这个新策略。这个参数的可选值有以下三种。
 
-1. COMMIT_ORDER，表示的就是前面介绍的，根据同时进入 prepare 和 commit 来判断是否可以并行的策略。
-2. WRITESET，表示的是对于事务涉及更新的每一行，计算出这一行的 hash 值，组成集合 writeset。如果两个事务没有操作相同的行，也就是说它们的 writeset 没有交集，就可以并行。
-3. WRITESET_SESSION，是在 WRITESET 的基础上多了一个约束，即在主库上同一个线程先后执行的两个事务，在备库执行的时候，要保证相同的先后顺序。
+1. `COMMIT_ORDER`，表示的就是前面介绍的，根据同时进入 prepare 和 commit 来判断是否可以并行的策略。
+2. `WRITESET`，表示的是对于事务涉及更新的每一行，计算出这一行的 hash 值，组成集合 writeset。如果两个事务没有操作相同的行，也就是说它们的 writeset 没有交集，就可以并行。
+3. `WRITESET_SESSION`，是在 WRITESET 的基础上多了一个约束，即在主库上同一个线程先后执行的两个事务，在备库执行的时候，要保证相同的先后顺序。
 
 当然为了唯一标识，这个 hash 值是通过“库名 + 表名 + 索引名 + 值”计算出来的。如果一个表上除了有主键索引外，还有其他唯一索引，那么对于每个唯一索引，insert 语句对应的 writeset 就要多增加一个 hash 值。
 
@@ -2128,15 +2158,15 @@ coordinator 在解析这个语句的 binlog 的时候，这个事务的 hash 表
 
 因此，MySQL 5.7.22 的并行复制策略在通用性上还是有保证的。
 
-## 27 | 主库出问题了，从库怎么办？
+### 12.4 主库出问题了，从库怎么办？
 
 ![image](https://mail.wangkekai.cn/84F8E8DA-DDA7-4794-913A-E35BE4DFB8C3.png)
  **一主多从基本结构 -- 主备切换**
 > 相比于一主一备的切换流程，一主多从结构在切换完成后，A’会成为新的主库，从库 B、C、D 也要改接到 A’。正是由于多了从库 B、C、D 重新指向的这个过程，所以主备切换的复杂性也相应增加了。
 
-### 基于位点的主备切换
+#### 基于位点的主备切换
 
-当我们把节点 B 设置成节点 A’的从库的时候，需要执行一条 change master 命令：
+当我们把节点 B 设置成节点 A’的从库的时候，需要执行一条 `change master` 命令：
 
 ```mysql
 CHANGE MASTER TO 
@@ -2148,8 +2178,8 @@ MASTER_LOG_FILE=$master_log_name
 MASTER_LOG_POS=$master_log_pos  
 ```
 
-- MASTER_HOST、MASTER_PORT、MASTER_USER 和 MASTER_PASSWORD 四个参数，分别代表了主库 A’的 IP、端口、用户名和密码。
-- 最后两个参数 MASTER_LOG_FILE 和 MASTER_LOG_POS 表示，要从主库的 master_log_name 文件的 master_log_pos 这个位置的日志继续同步。而这个位置就是我们所说的同步位点，也就是主库对应的文件名和日志偏移量。
+- `MASTER_HOST、MASTER_PORT、MASTER_USER 和 MASTER_PASSWORD` 四个参数，分别代表了主库 A’的 IP、端口、用户名和密码。
+- 最后两个参数 `MASTER_LOG_FILE` 和 `MASTER_LOG_POS` 表示，要从主库的 `master_log_name` 文件的 `master_log_pos` 这个位置的日志继续同步。而这个位置就是我们所说的同步位点，也就是主库对应的文件名和日志偏移量。
 
 原来节点 B 是 A 的从库，本地记录的也是 A 的位点。但是相同的日志，A 的位点和 A’的位点是不同的。因此，从库 B 要切换的时候，就需要先经过“**找同步位点**”这个逻辑。
 
@@ -2190,20 +2220,20 @@ start slave;
 
 因为切换过程中，可能会不止重复执行一个事务，所以我们需要在从库 B 刚开始接到新主库 A’时，持续观察，每次碰到这些错误就停下来，执行一次跳过命令，直到不再出现停下来的情况，以此来跳过可能涉及的所有事务。
 
-**另外一种方式是，通过设置 slave_skip_errors 参数**，直接设置跳过指定的错误。
+**另外一种方式是，通过设置 `slave_skip_errors` 参数**，直接设置跳过指定的错误。
 
 在执行主备切换时，有这么两类错误，是经常会遇到的：
 
 - 1062 错误是插入数据时唯一键冲突；
 - 1032 错误是删除数据时找不到行。
 
-因此，我们可以把 slave_skip_errors 设置为 “1032,1062”，这样中间碰到这两个错误时就直接跳过。
+因此，我们可以把 `slave_skip_errors` 设置为 “1032,1062”，这样中间碰到这两个错误时就直接跳过。
 
 这里需要注意的是，**这种直接跳过指定错误的方法，针对的是主备切换时，由于找不到精确的同步位点，所以只能采用这种方法来创建从库和新主库的主备关系**。
 
 这个背景是，我们很清楚在主备切换过程中，直接跳过 1032 和 1062 这两类错误是无损的，所以才可以这么设置 slave_skip_errors 参数。_等到主备间的同步关系建立完成，并稳定执行一段时间之后，我们还需要把这个参数设置为空，以免之后真的出现了主从数据不一致，也跳过了_。
 
-### GTID
+#### GTID
 
 通过 sql_slave_skip_counter 跳过事务和通过 slave_skip_errors 忽略错误的方法，虽然都最终可以建立从库 B 和新主库 A’的主备关系，但这两种操作都很复杂，而且容易出错。所以，MySQL 5.6 版本引入了 GTID，彻底解决了这个困难。
 
@@ -2223,8 +2253,8 @@ GTID=source_id:transaction_id
 
 > 在 MySQL 里面我们说 transaction_id 就是指事务 id，事务 id 是在事务执行过程中分配的，如果这个事务回滚了，事务 id 也会递增，而 gno 是在事务提交的时候才会分配。从效果上看，GTID 往往是连续的，因此我们用 gno 来表示更容易理解。
 
-GTID 模式的启动也很简单，我们只需要在启动一个 MySQL 实例的时候，加上参数 gtid_mode=on 和 enforce_gtid_consistency=on 就可以了。  
-在 GTID 模式下，每个事务都会跟一个 GTID 一一对应。_这个 GTID 有两种生成方式，而使用哪种方式取决于 session 变量 gtid_next 的值_。
+GTID 模式的启动也很简单，我们只需要在启动一个 MySQL 实例的时候，加上参数 `gtid_mode=on` 和 `enforce_gtid_consistency=on` 就可以了。  
+在 GTID 模式下，每个事务都会跟一个 GTID 一一对应。*这个 GTID 有两种生成方式，而使用哪种方式取决于 session 变量 gtid_next 的值*。
 
 1. 如果 gtid_next=automatic，代表使用默认值。这时，MySQL 就会把 server_uuid:gno 分配给这个事务。
 
@@ -2282,7 +2312,7 @@ start slave;
 
 在上面的这个语句序列中，start slave 命令之前还有一句 `set gtid_next=automatic`。**这句话的作用是“恢复 GTID 的默认分配行为”，也就是说如果之后有新的事务再执行，就还是按照原来的分配方式，继续分配 gno=3。**
 
-### 基于 GTID 的主备切换
+#### 基于 GTID 的主备切换
 
 在 GTID 模式下，备库 B 要设置为新主库 A’的从库的语法如下：
 
@@ -2299,7 +2329,7 @@ master_auto_position=1
 
 我们把现在这个时刻，实例 A’的 GTID 集合记为 set_a，实例 B 的 GTID 集合记为 set_b。接下来，我们就看看现在的主备切换逻辑。
 
-我们在实例 B 上执行 start slave 命令，取 binlog 的逻辑是这样的：
+我们在实例 B 上执行 `start slave` 命令，取 binlog 的逻辑是这样的：
 
 1. 实例 B 指定主库 A’，基于主备协议建立连接。
 2. 实例 B 把 set_b 发给主库 A’。
@@ -2311,9 +2341,10 @@ master_auto_position=1
 其实，这个逻辑里面包含了一个设计思想：**在基于 GTID 的主备关系里，系统认为只要建立主备关系，就必须保证主库发给备库的日志是完整的**。因此，如果实例 B 需要的日志已经不存在，A’就拒绝把日志发给 B。  
 这跟基于位点的主备协议不同。基于位点的协议，是由备库决定的，备库指定哪个位点，主库就发哪个位点，不做日志的完整性判断。
 
-### GTID 和在线 DDL
+#### GTID 和在线 DDL
 
->提到业务高峰期的慢查询性能问题时，分析到如果是由于索引缺失引起的性能问题，我们可以通过在线加索引来解决。但是，考虑到要避免新增索引对主库性能造成的影响，我们可以先在备库加索引，然后再切换。  
+>提到业务高峰期的慢查询性能问题时，分析到如果是由于索引缺失引起的性能问题，我们可以通过在线加索引来解决。但是，考虑到要避免新增索引对主库性能造成的影响，我们可以先在备库加索引，然后再切换。
+
 在双 M 结构下，备库执行的 DDL 语句也会传给主库，为了避免传回后对主库造成影响，要通过 set sql_log_bin=off 关掉 binlog。
 
 假设，这两个互为主备关系的库还是实例 X 和实例 Y，且当前主库是 X，并且都打开了 GTID 模式。这时的主备切换流程可以变成下面这样：
@@ -2335,14 +2366,14 @@ start slave;
 
 - 接下来，执行完主备切换，然后照着上述流程再执行一遍即可。
 
-#### Q:在 GTID 模式下，如果一个新的从库接上主库，但是需要的 binlog 已经没了，要怎么做？
+##### Q:在 GTID 模式下，如果一个新的从库接上主库，但是需要的 binlog 已经没了，要怎么做？
 
 1. 如果业务允许主从不一致的情况，那么可以在主库上先执行 show global variables like ‘gtid_purged’，得到主库已经删除的 GTID 集合，假设是 gtid_purged1；然后先在从库上执行 reset master，再执行 set global gtid_purged =‘gtid_purged1’；最后执行 start slave，就会从主库现存的 binlog 开始同步。binlog 缺失的那一部分，数据在从库上就可能会有丢失，造成主从不一致。
 2. 如果需要主从数据一致的话，最好还是通过重新搭建从库来做。
 3. 如果有其他的从库保留有全量的 binlog 的话，可以把新的从库先接到这个保留了全量 binlog 的从库，追上日志以后，如果有需要，再接回主库。
 4. 如果 binlog 有备份的情况，可以先在从库上应用缺失的 binlog，然后再执行 start slave。
 
-## 28 | 读写分离有哪些坑？
+### 12.5 读写分离有哪些坑
 
 ![image](https://mail.wangkekai.cn/3B7F7B51-53F6-4A95-818B-6F5137F76A5D.png)
 
@@ -2371,7 +2402,7 @@ start slave;
 - 等主库位点方案；
 - 等 GTID 方案。
 
-### 强制走主库方案
+#### 强制走主库方案
 
 我们可以将查询分为两类：
 
@@ -2380,7 +2411,7 @@ start slave;
 
 比如一些金融类的业务“所有查询都不能是过期读”的需求。这样的话，你就要放弃读写分离，所有读写压力都在主库，等同于放弃了扩展性。
 
-### Sleep 方案
+#### Sleep 方案
 
 主库更新后，读从库之前先 sleep 一下。具体的方案就是，类似于执行一条 select sleep(1) 命令。
 
@@ -2431,7 +2462,7 @@ start slave;
 
 ### 配合 semi-sync
 
-要解决这个问题，就要引入半同步复制，也就是 `semi-sync replication`。
+要解决这个问题，就要引入**半同步复制**，也就是 `semi-sync replication`。
 
 semi-sync 做了这样的设计：
 
@@ -2440,6 +2471,7 @@ semi-sync 做了这样的设计：
 3. 主库收到这个 ack 以后，才能给客户端返回“事务完成”的确认。
 
 > 如果主库掉电的时候，有些 binlog 还来不及发给从库，会不会导致系统数据丢失？  
+
 答案是，如果使用的是普通的异步复制模式，就可能会丢失，但 semi-sync 就可以解决这个问题。
 
 semi-sync+ 位点判断的方案，**只对一主一备的场景是成立的**。在一主多从场景中，主库只要等到一个从库的 ack，就开始给客户端返回确认。这时，在从库上执行查询请求，就有两种情况：
@@ -2459,7 +2491,7 @@ semi-sync 配合判断主备无延迟的方案，存在两个问题：
 1. 一主多从的时候，在某些从库执行查询请求会存在过期读的现象；
 2. 在持续延迟的情况下，可能出现过度等待的问题。
 
-### 等主库位点方案
+#### 等主库位点方案
 
 ```mysql
 select master_pos_wait(file, pos[, timeout]);
@@ -2491,7 +2523,7 @@ select master_pos_wait(file, pos[, timeout]);
 
 假设，这条 select 查询最多在从库上等待 1 秒。那么，如果 1 秒内 master_pos_wait 返回一个大于等于 0 的整数，就确保了从库上执行的这个查询结果一定包含了 trx1 的数据。
 
-### GTID 方案
+#### GTID 方案
 
 ```mysql
 select wait_for_executed_gtid_set(gtid_set, 1);
@@ -2530,7 +2562,7 @@ select wait_for_executed_gtid_set(gtid_set, 1);
 
 当然了，使用 gh-ost 方案来解决这个问题也是不错的选择。
 
-## 29 | 如何判断一个数据库是不是出问题了？
+## 13 如何判断一个数据库是不是出问题了？
 
 ### select 1 判断
 
@@ -2576,7 +2608,7 @@ MySQL 这样设计是非常有意义的。因为，进入锁等待的线程已�
 
 这时候 InnoDB 不能响应任何请求，整个系统被锁死。而且，由于所有线程都处于等待状态，此时占用的 CPU 却是 0，而这明显不合理。所以，我们说 InnoDB 在设计时，遇到进程进入锁等待的情况时，将并发线程的计数减 1 的设计，是合理而且是必要的。
 
-在这个例子中，**同时在执行的语句超过了设置的 innodb_thread_concurrency 的值，这时候系统其实已经不行了，但是通过 select 1 来检测系统，会认为系统还是正常的。**
+在这个例子中，**同时在执行的语句超过了设置的 `innodb_thread_concurrency` 的值，这时候系统其实已经不行了，但是通过 select 1 来检测系统，会认为系统还是正常的。**
 
 因此，我们使用 select 1 的判断逻辑要修改一下。
 
@@ -2674,11 +2706,11 @@ mysql> select event_name,MAX_TIMER_WAIT  FROM performance_schema.file_summary_by
 mysql> truncate table performance_schema.file_summary_by_event_name;
 ```
 
-## 30 | 答疑文章（二）：用动态的观点看加锁
+## 14 | 答疑 用动态的观点看加锁
 
 **加锁规则中，包含了两个“原则”、两个“优化”和一个“bug”：**
 
-- 原则 1：加锁的基本单位是 `next-key lock`。希望你还记得，`next-key lock` 是**前开后闭区间**。
+- 原则 1：加锁的基本单位是 `next-key lock`。`next-key lock` 是**前开后闭区间**。
 - 原则 2：查找过程中访问到的对象才会加锁。
 - 优化 1：索引上的等值查询，给唯一索引加锁的时候，`next-key lock` 退化为行锁。
 - 优化 2：索引上的等值查询，向右遍历时且最后一个值不满足等值条件的时候，`next-key lock` **退化为间隙锁**。
@@ -2842,7 +2874,7 @@ session A 的加锁范围是索引 c 上的 (5,10]、(10,15]、(15,20]、(20,25]
 
 第一步试图在已经加了间隙锁的 (1,10) 中插入数据，所以就被堵住了。
 
-## 31 | 误删数据后除了跑路，还能怎么办？
+## 15 删数据后怎么办？
 
 **对 MySQL 相关的误删数据，做下分类：**
 
@@ -2964,7 +2996,7 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 
 其实，对于一个有高可用机制的 MySQL 集群来说，最不怕的就是 rm 删除数据了。只要不是恶意地把整个集群删除，而只是删掉了其中某一个节点的数据的话，HA 系统就会开始工作，选出一个新的主库，从而保证整个集群的正常工作。
 
-## 32 | 为什么还有kill不掉的语句？
+## 16 为什么还有kill不掉的语句？
 
 在 MySQL 中有两个 kill 命令：一个是 kill query + 线程 id，表示终止这个线程中正在执行的语句；一个是 kill connection + 线程 id，这里 connection 可缺省，表示断开这个线程的连接，当然如果这个线程有语句正在执行，也是要先停止正在执行的语句的。
 
