@@ -2998,9 +2998,9 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 
 ## 16 为什么还有kill不掉的语句？
 
-在 MySQL 中有两个 kill 命令：一个是 kill query + 线程 id，表示终止这个线程中正在执行的语句；一个是 kill connection + 线程 id，这里 connection 可缺省，表示断开这个线程的连接，当然如果这个线程有语句正在执行，也是要先停止正在执行的语句的。
+在 MySQL 中有两个 kill 命令：一个是 `kill query + 线程 id`，表示终止这个线程中正在执行的语句；一个是 `kill connection + 线程 id`，这里 connection 可缺省，表示断开这个线程的连接，当然如果这个线程有语句正在执行，也是要先停止正在执行的语句的。
 
-有时候使用了 kill 命令，却没能断开这个连接。再执行 show processlist 命令，看到这条语句的 Command 列显示的是 Killed。
+有时候使用了 kill 命令，却没能断开这个连接。再执行 `show processlist` 命令，看到这条语句的 Command 列显示的是 Killed。
 
 语句处于锁等待的时候，直接使用 kill 命令也是有效的。如下图：
 ![image](https://mail.wangkekai.cn/DD0D156A-150E-44F7-ABDF-623163B1B459.png)
@@ -3009,6 +3009,7 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 
 上图中 session B 是直接终止掉线程，什么都不管就直接退出吗？显然，这是不行的。
 > 当对一个表做增删改查操作时，会在表上加 MDL 读锁。所以，session B 虽然处于 blocked 状态，但还是拿着一个 MDL 读锁的。如果线程被 kill 的时候，就直接终止，那之后这个 MDL 读锁就没机会被释放了。
+
 其实，这跟 Linux 的 kill 命令类似，`kill -N pid` 并不是让进程直接停止，而是给进程发一个信号，然后进程处理这个信号，进入终止逻辑。只是对于 MySQL 的 kill 命令来说，不需要传信号量参数，就只有“停止”这个命令。
 
 **当用户执行 kill query thread_id_B 时，MySQL 里处理 kill 命令的线程做了两件事：**
@@ -3017,11 +3018,11 @@ Flashback 恢复数据的原理，是修改 binlog 的内容，拿回原库重�
 2. 给 session B 的执行线程发一个信号。
 
 为什么要发信号呢？  
-session B 处于锁等待状态，如果只是把 session B 的线程状态设置 THD::KILL_QUERY，线程 B 并不知道这个状态变化，还是会继续等待。发一个信号的目的，就是让 session B 退出等待，来处理这个 THD::KILL_QUERY 状态。
+session B 处于锁等待状态，如果只是把 session B 的线程状态设置 `THD::KILL_QUERY`，线程 B 并不知道这个状态变化，还是会继续等待。发一个信号的目的，就是让 session B 退出等待，来处理这个 `THD::KILL_QUERY` 状态。
 
-上面的分析中，隐含了这么三层意思：
+上面的分析中，还有这么三层意思：
 
-1. 一个语句执行过程中有多处“埋点”，在这些“埋点”的地方判断线程状态，如果发现线程状态是 THD::KILL_QUERY，才开始进入语句终止逻辑；
+1. 一个语句执行过程中有多处“埋点”，在这些“埋点”的地方判断线程状态，如果发现线程状态是 `THD::KILL_QUERY`，才开始进入语句终止逻辑；
 2. 如果处于等待状态，必须是一个可以被唤醒的等待，否则根本不会执行到“埋点”处；
 3. 语句从开始进入终止逻辑，到终止逻辑完全完成，是有一个过程的。
 
@@ -3030,9 +3031,9 @@ session B 处于锁等待状态，如果只是把 session B 的线程状态设�
 首先，执行 `set global innodb_thread_concurrency=2`，将 InnoDB 的并发线程上限数设置为 2；然后，执行下面的序列：
 ![image](https://mail.wangkekai.cn/9E6236D1-BEB8-4C57-BEB2-C6AB789222CF.png)
 
-1. sesssion C 执行的时候被堵住了；
-2. 但是 session D 执行的 kill query C 命令却没什么效果，
-3. 直到 session E 执行了 kill connection 命令，才断开了 session C 的连接，提示“Lost connection to MySQL server during query”，
+1. sesssion C 执行的时候被堵住了
+2. 但是 session D 执行的 kill query C 命令却没什么效果
+3. 直到 session E 执行了 kill connection 命令，才断开了 session C 的连接，提示“Lost connection to MySQL server during query”
 4. 但是这时候，如果在 session E 中执行 show processlist，你就能看到下面这个图。
 
 ![image](https://mail.wangkekai.cn/5A5DBC8D-F62D-463A-BFA1-09552476B0E0.png)
@@ -3109,7 +3110,7 @@ MySQL 客户端发送请求后，接收服务端返回结果的方式有两种�
 2. 第二点，mysql_store_result 需要申请本地内存来缓存查询结果，如果查询结果太大，会耗费较多的本地内存，可能会影响客户端本地机器的性能；
 3. 第三点，是不会把执行命令记录到本地的命令历史文件。 所以你看到了，–quick 参数的意思，是让客户端变得更快。
 
-## 33 | 我查这么多数据，会不会把数据库内存打爆？
+## 17 | 查这么多数据，会不会把数据库内存打爆？
 
 ### 全表扫描对 server 层的影响
 
@@ -3123,9 +3124,9 @@ mysql -h$host -P$port -u$user -p$pwd -e "select * from db1.t" > $target_file
 
 实际上，服务端并不需要保存一个完整的结果集。取数据和发数据的流程是这样的：
 
-1. 获取一行，写到 net_buffer 中。这块内存的大小是由参数 net_buffer_length 定义的，默认是 16k。
-2. 重复获取行，直到 net_buffer 写满，调用网络接口发出去。
-3. 如果发送成功，就清空 net_buffer，然后继续取下一行，并写入 net_buffer。
+1. 获取一行，写到 `net_buffer` 中。这块内存的大小是由参数 `net_buffer_length` 定义的，默认是 16k。
+2. 重复获取行，直到 `net_buffer` 写满，调用网络接口发出去。
+3. 如果发送成功，就清空 `net_buffer`，然后继续取下一行，并写入 net_buffer。
 4. 如果发送函数返回 EAGAIN 或 WSAEWOULDBLOCK，就表示本地网络栈（socket send buffer）写满了，进入等待。直到网络栈重新可写，再继续发送。
 
 ![image](https://mail.wangkekai.cn/A3CB6562-25E5-4859-BA28-9D6544CE219F.png)
@@ -3135,12 +3136,12 @@ mysql -h$host -P$port -u$user -p$pwd -e "select * from db1.t" > $target_file
 1. 一个查询在发送过程中，占用的 MySQL 内部的内存最大就是 `net_buffer_length` 这么大，并不会达到 200G；
 2. `socket send buffer` 也不可能达到 200G（默认定义 /proc/sys/net/core/wmem_default），如果 `socket send buffer` 被写满，就会暂停读数据的流程。
 
-**MySQL 是“边读边发的”**，这个概念很重要。这就意味着，如果客户端接收得慢，会导致 MySQL 服务端由于结果发不出去，这个事务的执行时间变长。  
+**MySQL 是“边读边发的”**。这就意味着，如果客户端接收得慢，会导致 MySQL 服务端由于结果发不出去，这个事务的执行时间变长。  
 故意让客户端不去读 `socket receive buffer` 中的内容，下图是在服务端 show processlist 看到的结果。
 
 ![image](https://mail.wangkekai.cn/BF12D3D5-9EFD-42B9-B7A8-383D43D34D2C.png)
 
-如果你看到 State 的值一直处于“**Sending to client**”，就表示服务器端的网络栈写满了。
+**如果你看到 State 的值一直处于“Sending to client”，就表示服务器端的网络栈写满了**。
 
 **对于正常的线上业务来说，如果一个查询的返回结果不会很多的话，我都建议你使用 mysql_store_result 这个接口，直接把查询结果保存到本地内存。**
 
@@ -3156,6 +3157,10 @@ mysql -h$host -P$port -u$user -p$pwd -e "select * from db1.t" > $target_file
 - 执行完成后，把状态设置成空字符串。
 
 > “Sending data”并不一定是指“正在发送数据”，而可能是处于执行器过程中的任意阶段。比如，你可以构造一个锁等待的场景，就能看到 Sending data 状态。
+
+**仅当一个线程处于“等待客户端接收结果”的状态，才会显示"Sending to client"**；而如果显示成“Sending data”，它的意思只是“正在执行”。
+
+查询的结果是分段发给客户端的，因此扫描全表，查询返回大量的数据，并不会把内存打爆。
 
 ### 全表扫描对 InnoDB 的影响
 
@@ -3220,7 +3225,7 @@ InnoDB 管理 Buffer Pool 的 LRU 算法，是用链表来实现的。
 1. 如果前面的语句有更新，意味着它们在占用着行锁，会导致别的语句更新被锁住；
 2. 当然读的事务也有问题，就是会导致 undo log 不能被回收，导致回滚段空间膨胀。
 
-## 34 | 到底可不可以使用join？
+## 18 | Join
 
 先创建两张表：
 
