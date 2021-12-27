@@ -1,6 +1,6 @@
 # MYSQL
 
-## 1 SQL 语句的执行流程
+## 1 | SQL 语句的执行流程
 
 **MySQL 可以分为 Server 层和存储引擎层两部分。**
 
@@ -219,7 +219,7 @@ binlog 的写入逻辑比较简单：事务执行过程中，先把日志写到 
 ![image](https://mail.wangkekai.cn/224F7159-52BB-486B-BA0F-94BF7640E9FA.png)
 可以看到，每个线程有自己 binlog cache，但是共用同一份 binlog 文件。
 
-- 图中的 write，指的就是指把日志写入到文件系统的 page cache，并没有把数据持久化到磁盘，所以速度比较快。
+- 图中的 write，指的就是把日志写入到文件系统的 page cache，并没有把数据持久化到磁盘，所以速度比较快。
 - 图中的 fsync，才是将数据持久化到磁盘的操作。一般情况下，我们认为 fsync 才占磁盘的 IOPS。
 
 **write 和 fsync 的时机，是由参数 sync_binlog 控制的**：
@@ -1473,6 +1473,21 @@ mysql 会正常进行加锁和更新，不会提前读出来进行判断操作�
 ## 9 | “order by” 是怎么工作的？
 
 ### 9.1 order by 基础
+
+```shell
+CREATE TABLE `t` (
+  `id` int(11) NOT NULL,
+  `city` varchar(16) NOT NULL,
+  `name` varchar(16) NOT NULL,
+  `age` int(11) NOT NULL,
+  `addr` varchar(128) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `city` (`city`)
+) ENGINE=InnoDB;
+
+# 执行当前 sql 
+select city,name,age from t where city='杭州' order by name limit 1000  ;
+```
 
 #### 全字段排序
 
