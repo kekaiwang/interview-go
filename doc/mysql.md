@@ -203,7 +203,7 @@ InnoDB 每次写入的日志都有一个序号，当前写入的序号跟 checkp
 
 ##### 如果 redo log 设置太小，会怎么样？
 
-每次事务提交都要写 redo log，如果设置太小，很快就会被写满，也就是下面这个图的状态，这个“环”将很快被写满，write pos 一直追着 CP。看到的现象就**是磁盘压力很小，但是数据库出现间歇性的性能下跌**。
+每次事务提交都要写 redo log，如果设置太小，很快就会被写满，这个“环”将很快被写满，`write pos` 一直追着 CP。看到的现象就**是磁盘压力很小，但是数据库出现间歇性的性能下跌**。
 
 ### 2.3 Mysql 是怎么保证数据不丢的
 
@@ -219,8 +219,8 @@ binlog 的写入逻辑比较简单：事务执行过程中，先把日志写到 
 ![image](https://mail.wangkekai.cn/224F7159-52BB-486B-BA0F-94BF7640E9FA.png)
 可以看到，每个线程有自己 binlog cache，但是共用同一份 binlog 文件。
 
-- 图中的 write，指的就是把日志写入到文件系统的 page cache，并没有把数据持久化到磁盘，所以速度比较快。
-- 图中的 fsync，才是将数据持久化到磁盘的操作。一般情况下，我们认为 fsync 才占磁盘的 IOPS。
+- 图中的 `write`，指的就是把日志写入到文件系统的 `page cache`，并没有把数据持久化到磁盘，所以速度比较快。
+- 图中的 `fsync`，才是将数据持久化到磁盘的操作。一般情况下，我们认为 `fsync` 才占磁盘的 IOPS。
 
 **write 和 fsync 的时机，是由参数 sync_binlog 控制的**：
 
@@ -349,7 +349,7 @@ SQL 标准的事务隔离级别包括：
 
 1. **读未提交（read uncommitted）**，一个事务还没提交时，它做的变更就能被别的事务看到。
 2. **读提交（read committed）**，一个事务提交之后，它做的变更才会被其他事务看到。
-3. **可重复读repeatable read）**，一个事务执行过程中看到的数据，总是跟这个事务在启动时看到的数据是一致的。当然在可重复读隔离级别下，未提交变更对其他事务也是不可见的。
+3. **可重复读（repeatable read）**，一个事务执行过程中看到的数据，总是跟这个事务在启动时看到的数据是一致的。当然在可重复读隔离级别下，未提交变更对其他事务也是不可见的。
 4. **串行化（serializable）**，顾名思义是对于同一行记录，“写”会加“写锁”，“读”会加“读锁”。当出现读写锁冲突的时候，后访问的事务必须等前一个事务执行完成，才能继续执行。
 
 ```shell
@@ -398,7 +398,7 @@ select * from information_schema.innodb_trx where TIME_TO_SEC(timediff(now(),trx
 
 当系统里没有比这个回滚日志更早的 read-view 的时候也就是当没有事务再需要用到这些回滚日志时 **回滚日志会被删除**。
 
-**长事务** 意味着系统里面会存在很老的事务视图。由于这些事务随时可能访问数据库里面的任何数据，所以这个事务提交之前，数据库里面它可能用到的回滚记录都必须保留，这就会导致*大量占用存储空间*，同时长事务还*占用锁资源*。
+**长事务** 意味着系统里面会存在很老的事务视图。由于这些事务随时可能访问数据库里面的任何数据，所以这个事务提交之前，数据库里面它可能用到的回滚记录都必须保留，**这就会导致*大量占用存储空间*，同时长事务还*占用锁资源***。
 
 _在 MySQL 5.5 及以前的版本，回滚日志是跟数据字典一起放在 ibdata 文件里的，即使长事务最终提交，回滚段被清理，文件也不会变小_。
 
@@ -417,12 +417,12 @@ insert into t(id, k) values(1,1),(2,2);
 
 ![image](https://mail.wangkekai.cn/30FFAA92-652B-4B68-A8E4-C6F1EB13E6C1.png)
 
-事务B查询到的值是 3，而事务A查到的值是 1。下面就说明为什么？
+*事务B查询到的值是 3，而事务A查到的值是 1。*
 
 #### “快照”在 MVCC 里是怎么工作的？
 
 InnoDB 里面每个事务有一个唯一的事务 ID，叫作 `transaction id`。它是在事务开始的时候向 InnoDB 的事务系统申请的，是按申请顺序严格递增的。  
-**而每行数据也都是有多个版本的**。_每次事务更新数据的时候，都会生成一个新的数据版本，并且把 transaction id 赋值给这个数据版本的事务 ID，记为 `row trx_id`_。同时，旧的数据版本要保留，并且在新的数据版本中，能够有信息可以直接拿到它。
+**每行数据也都是有多个版本的**。_每次事务更新数据的时候，都会生成一个新的数据版本，并且把 `transaction id` 赋值给这个数据版本的事务 ID，记为 `row trx_id`_。同时，旧的数据版本要保留，并且在新的数据版本中，能够有信息可以直接拿到它。
 ![image](https://mail.wangkekai.cn/1632232076417.jpg)
 
 虚线框里是同一行数据的 4 个版本，当前最新版本是 V4，k 的值是 22，它是被 transaction id 为 25 的事务更新的，因此它的 row trx_id 也是 25。
@@ -607,7 +607,7 @@ update t set d=100 where d=5;/* 所有 d=5 的行，d 改成 100*/
 
 这个语句序列，不论是拿到备库去执行，还是以后用 binlog 来克隆一个库，这三行的结果，都变成了 (0,5,100)、(1,5,100) 和 (5,5,100)。
 
-这是我们假设“select * from t where d=5 for update 这条语句只给 d=5 这一行，也就是 id=5 的这一行加锁”导致的。
+这是我们假设 `select * from t where d=5 for update` 这条语句只给 d=5 这一行，也就是 id=5 的这一行加锁”导致的。
 
 假设扫描到的行都被加上了行锁。
 
@@ -655,7 +655,9 @@ id=1 这一行，在数据库里面的结果是 (1,5,5)，而根据 binlog 的�
 
 **间隙锁的引入，可能会导致同样的语句锁住更大的范围，这其实是影响了并发度的**。
 
-**间隙锁是在可重复读隔离级别下才会生效的，你如果把隔离级别设置为读提交的话，就没有间隙锁了**。但同时，你要解决可能出现的数据和日志不一致问题，需要把 binlog 格式设置为 row。这，也是现在不少公司使用的配置组合。
+**间隙锁是在可重复读隔离级别下才会生效的，你如果把隔离级别设置为读提交的话，就没有间隙锁了**。
+
+**但同时，你要解决可能出现的数据和日志不一致问题，需要把 binlog 格式设置为 row。这，也是现在不少公司使用的配置组合。**
 
 ## 4 | 索引
 
@@ -832,7 +834,7 @@ mysql> insert into t(id,k) values(id1,k1),(id2,k2);
 比如，现在要执行 select * from t where k in (k1, k2)。读请求的流程图。
 ![image](https://mail.wangkekai.cn/changebufferselect1602758426849.jpg)
 
-1. 读 Page 1 的时候，直接从内存返回。WAL 之后如果读数据，是不是一定要读盘，是不是一定要从 redo log 里面把数据更新以后才可以返回？其实是不用的。你可以看一下图 3 的这个状态，虽然磁盘上还是之前的数据，但是这里直接从内存返回结果，结果是正确的。
+1. 读 Page 1 的时候，直接从内存返回。WAL 之后如果读数据，是不是一定要读盘，是不是一定要从 redo log 里面把数据更新以后才可以返回？其实是不用的。你可以看一下上图的这个状态，虽然磁盘上还是之前的数据，但是这里直接从内存返回结果，结果是正确的。
 1. 要读 Page 2 的时候，需要把 Page 2 从磁盘读入内存中，然后应用 change buffer 里面的操作日志，生成一个正确的版本并返回结果。
 
 **redo log 主要节省的是随机写磁盘的 IO 消耗（转成顺序写），而 change buffer 主要节省的则是随机读磁盘的 IO 消耗**。
@@ -1092,7 +1094,7 @@ insert into t values(0,0,0),(5,5,5),
 
 需要注意，在这个例子中，**`lock in share mode` 只锁覆盖索引，但是如果是 for update 就不一样了**。 执行 for update 时，系统会认为你接下来要更新数据，**因此会顺便给主键索引上满足条件的行加上行锁**。
 
-这个例子说明，**锁是加在索引上的**；同时，它给我们的指导是，如果你要用 `lock in share mode` 来给行加读锁避免数据被更新的话，就必须得绕过覆盖索引的优化，在查询字段中加入索引中不存在的字段。
+这个例子说明，**锁是加在索引上的**；同时，它给我们的指导是，**如果你要用 `lock in share mode` 来给行加读锁避免数据被更新的话，就必须得绕过覆盖索引的优化，在查询字段中加入索引中不存在的字段**。
 
 #### 主键索引范围锁
 
@@ -1221,7 +1223,7 @@ session B 的“加 next-key lock(5,10] ”操作，实际上分成了两步，�
 
 根据表 A 重建出来的数据是放在 “tmp_file” 里的，这个临时文件是 InnoDB 在内部创建出来的。整个 DDL 过程都在 InnoDB 内部完成。**对于 server 层来说，没有把数据挪动到临时表，是一个“原地”操作，这就是 “inplace” 名称的来源**。
 
-我们重建表的这个语句 alter table t engine=InnoDB，其实隐含的意思是：
+我们重建表的这个语句 `alter table t engine=InnoDB`，其实隐含的意思是：
 
 ```mysql
 alter table t engine=innodb,ALGORITHM=inplace;
@@ -1239,8 +1241,8 @@ alter table t engine=innodb,ALGORITHM=copy;
 - 反过来未必，也就是说 inplace 的 DDL，有可能不是 Online 的。截止到 MySQL 8.0，**添加全文索引（FULLTEXT index）和空间索引 (SPATIAL index) 就属于这种情况**。
 
 1. 从 MySQL 5.6 版本开始，`alter table t engine = InnoDB`（也就是 recreate）默认的就是上面 Online DDL 流程了；
-1. analyze table t 其实不是重建表，只是对表的索引信息做重新统计，没有修改数据，这个过程中加了 MDL 读锁；
-1. optimize table t 等于 recreate+analyze。
+1. `analyze table t` 其实不是重建表，只是对表的索引信息做重新统计，没有修改数据，这个过程中加了 MDL 读锁；
+1. `optimize table t` 等于 `recreate+analyze`。
 
 ## 7 | 为什么这么慢系列
 
@@ -1259,7 +1261,7 @@ alter table t engine=innodb,ALGORITHM=copy;
 
 InnoDB 是索引组织表，主键索引树的叶子节点是数据，而普通索引树的叶子节点是主键值。所以，普通索引树比主键索引树小很多。对于 `count(*)` 这样的操作，遍历哪个索引树得到的结果逻辑上都是一样的。**在保证逻辑正确的前提下，尽量减少扫描的数据量，是数据库系统设计的通用法则之一。**
 
-索引统计的值是通过采样来估算的。实际上，TABLE_ROWS 就是从这个采样估算得来的，因此它也很不准。有多不准呢，官方文档说误差可能达到 40% 到 50%。所以，**`show table status` 命令显示的行数也不能直接使用**
+索引统计的值是通过采样来估算的。实际上，`TABLE_ROWS` 就是从这个采样估算得来的，因此它也很不准。有多不准呢，官方文档说误差可能达到 40% 到 50%。所以，**`show table status` 命令显示的行数也不能直接使用**
 
 - MyISAM 表虽然 `count(*)` 很快，但是不支持事务；
 - `show table status` 命令虽然返回很快，但是不准确；
@@ -1374,18 +1376,18 @@ mysql> select * from table_a where b='1234567890abcd';
 
 ### 日志相关问题
 
-**在两阶段提交的不同时刻，MySQL 异常重启会出现什么现象。**
+#### 在两阶段提交的不同时刻，MySQL 异常重启会出现什么现象
 
 **写入 redo log 处于 prepare 阶段之后、写 binlog 之前，发生了崩溃（crash）**，由于此时 binlog 还没写，redo log 也还没提交，所以崩溃恢复的时候，这个事务会回滚。这时候，binlog 还没写，所以也不会传到备库。
 
-**binlog 写完，redo log 还没 commit 前发生 crash，那崩溃恢复的时候 MySQL 会怎么处理？**
+#### binlog 写完，redo log 还没 commit 前发生 crash，那崩溃恢复的时候 MySQL 会怎么处理？
 
 1. 如果 redo log 里面的事务是完整的，也就是已经有了 commit 标识，则直接提交；
 2. 如果 redo log 里面的事务只有完整的 prepare，则判断对应的事务 binlog 是否存在并完整：
     1. 如果是，则提交事务；
     2. 否则，回滚事务。
 
-### 追问 1：MySQL 怎么知道 binlog 是完整的?
+##### 追问 1：MySQL 怎么知道 binlog 是完整的?
 
 一个事务的 binlog 是有完整格式的：
 
@@ -1394,20 +1396,20 @@ mysql> select * from table_a where b='1234567890abcd';
 
 在 MySQL 5.6.2 版本以后，还引入了 `binlog-checksum` 参数，用来验证 binlog 内容的正确性。
 
-### 追问 2：redo log 和 binlog 是怎么关联起来的?
+##### 追问 2：redo log 和 binlog 是怎么关联起来的?
 
 它们有一个共同的数据字段，叫 `XID`。崩溃恢复的时候，会按顺序扫描 redo log：
 
 - 如果碰到既有 prepare、又有 commit 的 redo log，就直接提交；
 - 如果碰到只有 parepare、而没有 commit 的 redo log，就拿着 XID 去 binlog 找对应的事务。
 
-### 追问 3：处于 prepare 阶段的 redo log 加上完整 binlog，重启就能恢复，MySQL 为什么要这么设计?
+##### 追问 3：处于 prepare 阶段的 redo log 加上完整 binlog，重启就能恢复，MySQL 为什么要这么设计?
 
 其实，这个问题还是跟我们在反证法中说到的数据与备份的一致性有关。也就是 binlog 写完以后 MySQL 发生崩溃，这时候 binlog 已经写入了，之后就会被从库（或者用这个 binlog 恢复出来的库）使用。
 
 所以，在主库上也要提交这个事务。采用这个策略，**主库和备库的数据就保证了一致性**。
 
-### 追问 4：如果这样的话，为什么还要两阶段提交呢？干脆先 redo log 写完，再写 binlog。崩溃恢复的时候，必须得两个日志都完整才可以。是不是一样的逻辑？
+##### 追问 4：如果这样的话，为什么还要两阶段提交呢？干脆先 redo log 写完，再写 binlog。崩溃恢复的时候，必须得两个日志都完整才可以。是不是一样的逻辑？
 
 其实，两阶段提交是经典的分布式系统问题，并不是 MySQL 独有的。
 
@@ -1417,7 +1419,7 @@ mysql> select * from table_a where b='1234567890abcd';
 
 两阶段提交就是为了给所有人一个机会，当每个人都说“我 ok”的时候，再一起提交。
 
-### 追问 5：不引入两个日志，也就没有两阶段提交的必要了。只用 binlog 来支持崩溃恢复，又能支持归档，不就可以了？
+##### 追问 5：不引入两个日志，也就没有两阶段提交的必要了。只用 binlog 来支持崩溃恢复，又能支持归档，不就可以了？
 
 InnoDB 在作为 MySQL 的插件加入 MySQL 引擎家族之前，就已经是一个提供了崩溃恢复和事务支持的引擎了。
 
@@ -1434,7 +1436,7 @@ InnoDB 接入了 MySQL 后，发现既然 binlog 没有崩溃恢复的能力，�
 
 所以，至少现在的 binlog 能力，还不能支持崩溃恢复。
 
-### 追问 6：那能不能反过来，只用 redo log，不要 binlog？
+##### 追问 6：那能不能反过来，只用 redo log，不要 binlog？
 
 如果只从崩溃恢复的角度来讲是可以的。你可以把 binlog 关掉，这样就没有两阶段提交了，但系统依然是 crash-safe 的。
 在正式的生产库上，binlog 都是开着的。因为 binlog 有着 redo log 无法替代的功能。
@@ -1445,20 +1447,20 @@ InnoDB 接入了 MySQL 后，发现既然 binlog 没有崩溃恢复的能力，�
 
 还有很多公司有异构系统（比如一些数据分析系统），这些系统就靠消费 MySQL 的 binlog 来更新自己的数据。关掉 binlog 的话，这些下游系统就没法输入了。
 
-### 追问 7：redo log 一般设置多大？
+##### 追问 7：redo log 一般设置多大？
 
 redo log 太小的话，会导致很快就被写满，然后不得不强行刷 redo log，这样 WAL 机制的能力就发挥不出来了。
 
 所以，如果是现在常见的几个 TB 的磁盘的话，就不要太小气了，直接将 redo log 设置为 4 个文件、每个文件 1GB 。
 
-### 追问 8：正常运行中的实例，数据写入后的最终落盘，是从 redo log 更新过来的还是从 buffer pool 更新过来的呢？
+##### 追问 8：正常运行中的实例，数据写入后的最终落盘，是从 redo log 更新过来的还是从 buffer pool 更新过来的呢？
 
 实际上，redo log 并没有记录数据页的完整数据，所以它并没有能力自己去更新磁盘数据页，也就不存在“数据最终落盘，是由 redo log 更新过去”的情况。
 
 1. 如果是正常运行的实例的话，数据页被修改以后，跟磁盘的数据页不一致，称为脏页。最终数据落盘，就是把内存中的数据页写盘。这个过程，甚至与 redo log 毫无关系。
 2. 在崩溃恢复场景中，InnoDB 如果判断到一个数据页可能在崩溃恢复的时候丢失了更新，就会将它读到内存，然后让 redo log 更新内存内容。更新完成后，内存页变成脏页，就回到了第一种情况的状态。
 
-### 追问 9：redo log buffer 是什么？是先修改内存，还是先写 redo log 文件？
+##### 追问 9：redo log buffer 是什么？是先修改内存，还是先写 redo log 文件？
 
 事务要往两个表中插入记录，插入数据的过程中，生成的日志都得先保存起来，但又不能在还没 commit 的时候就直接写到 redo log 文件里。
 
@@ -1539,8 +1541,8 @@ SET max_length_for_sort_data = 16;
 
 从 OPTIMIZER_TRACE 的结果中，你还能看到另外两个信息也变了。
 
-- sort_mode 变成了 `<sort_key, rowid>`，表示参与排序的只有 name 和 id 这两个字段。
-- number_of_tmp_files 变成 10 了，是因为这时候参与排序的行数虽然仍然是 4000 行，但是每一行都变小了，因此需要排序的总数据量就变小了，需要的临时文件也相应地变少了。
+- `sort_mode` 变成了 `<sort_key, rowid>`，表示参与排序的只有 name 和 id 这两个字段。
+- `number_of_tmp_files` 变成 10 了，是因为这时候参与排序的行数虽然仍然是 4000 行，但是每一行都变小了，因此需要排序的总数据量就变小了，需要的临时文件也相应地变少了。
 
 #### 全字段排序 VS rowid 排序
 
@@ -1620,7 +1622,7 @@ explain Extra 字段显示 `Using temporary`，表示的是需要使用临时表
 2. 取下一个行 (R’,rowid’)，跟当前堆里面最大的 R 比较，如果 R’小于 R，把这个 (R,rowid) 从堆中去掉，换成 (R’,rowid’)；
 3. 重复第 2 步，直到第 10000 个 (R’,rowid’) 完成比较。
 
-OPTIMIZER_TRACE 结果中，filesort_priority_queue_optimization 这个部分的 chosen=true，**就表示使用了优先队列排序算法，这个过程不需要临时文件**，因此对应的 number_of_tmp_files 是 0
+OPTIMIZER_TRACE 结果中，`filesort_priority_queue_optimization` 这个部分的 chosen=true，**就表示使用了优先队列排序算法，这个过程不需要临时文件**，因此对应的 number_of_tmp_files 是 0
 
 > SQL 语句是 limit 1000，如果使用优先队列算法的话，需要维护的堆的大小就是 1000 行的 (name,rowid)，超过了我设置的 **sort_buffer_size** 大小，所以只能使用归并排序算法。
 
@@ -2004,7 +2006,7 @@ mysqlbinlog master.000001  --start-position=2738 --stop-position=2973 | mysql -h
 
 而日志在备库上的执行，就是图中备库上 sql_thread 更新数据 (DATA) 的逻辑。如果是用单线程的话，就会导致备库应用日志不够快，造成主备延迟。
 
-其实说到底，所有的多线程复制机制，都是要把图 1 中只有一个线程的 sql_thread，拆成多个线程，也就是都符合下面的这个模型：
+其实说到底，所有的多线程复制机制，都是要把图中只有一个线程的 sql_thread，拆成多个线程，也就是都符合下面的这个模型：
 ![image](https://mail.wangkekai.cn/A6AC159B-5E50-440A-BD75-06F225A8498B.png)
 **多线程模型**
 
@@ -3152,7 +3154,7 @@ session B 处于锁等待状态，如果只是把 session B 的线程状态设�
 首先，执行 `set global innodb_thread_concurrency=2`，将 InnoDB 的并发线程上限数设置为 2；然后，执行下面的序列：
 ![image](https://mail.wangkekai.cn/9E6236D1-BEB8-4C57-BEB2-C6AB789222CF.png)
 
-1. sesssion C 执行的时候被堵住了
+1. session C 执行的时候被堵住了
 2. 但是 session D 执行的 kill query C 命令却没什么效果
 3. 直到 session E 执行了 kill connection 命令，才断开了 session C 的连接，提示“Lost connection to MySQL server during query”
 4. 但是这时候，如果在 session E 中执行 show processlist，你就能看到下面这个图。
@@ -3642,7 +3644,7 @@ set optimizer_switch='mrr=on,mrr_cost_based=off,batched_key_access=on';
 **大表 join 操作虽然对 IO 有影响，但是在语句执行结束后，对 IO 的影响也就结束了。但是，对 `Buffer Pool` 的影响就是持续性的，需要依靠后续的查询请求慢慢恢复内存命中率。**  
 为了减少这种影响，你可以考虑增大 `join_buffer_size` 的值，减少对被驱动表的扫描次数。
 
-也就是说，BNL 算法对系统的影响主要包括三个方面：
+也就是说，**BNL 算法对系统的影响主要包括三个方面**：
 
 1. 可能会多次扫描被驱动表，占用磁盘 IO 资源；
 2. 判断 `join` 条件需要执行 `M*N` 次对比（M、N 分别是两张表的行数），如果是大表就会占用非常多的 CPU 资源；
