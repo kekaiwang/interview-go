@@ -33,3 +33,8 @@ GoLang/PHP 面试整理
 ## 每日一记
 
 - [Daily Note](https://github.com/kekaiwang/interview-go/blob/main/daily_note/)
+
+参考资料：
+
+- [Go 语言设计与实现](https://draveness.me/golang)
+- [Go Questions](https://golang.design/go-questions)
