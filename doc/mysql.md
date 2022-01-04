@@ -1,5 +1,7 @@
 # MYSQL
 
+[toc]
+
 ## 1 | SQL 语句的执行流程
 
 **MySQL 可以分为 Server 层和存储引擎层两部分。**
