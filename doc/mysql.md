@@ -636,7 +636,9 @@ id=1 这一行，在数据库里面的结果是 (1,5,5)，而根据 binlog 的�
 
 产生幻读的原因是，行锁只能锁住行，但是新插入记录这个动作，要更新的是记录之间的“间隙”。因此，**为了解决幻读问题，InnoDB 只好引入间隙锁 (Gap Lock)**。
 
-**跟间隙锁存在冲突关系的，是“往这个间隙中插入一个记录”这个操作**。间隙锁之间都不存在冲突关系。
+**跟间隙锁存在冲突关系的，是“往这个间隙中插入一个记录”这个操作**。
+
+**间隙锁之间都不存在冲突关系。**
 
 ![image](https://mail.wangkekai.cn/1640318697232.jpg)
 
@@ -791,7 +793,7 @@ MySQL 5.6 引入的索引下推优化（index condition pushdown)， 可以在�
     - *对于唯一索引来说*，需要将数据页读入内存，判断到没有冲突，插入这个值，语句执行结束；
     - *对于普通索引来说*，则是将更新记录在 change buffer，语句执行就结束了。
 
-将数据从磁盘读入内存涉及随机 IO 的访问，是数据库里面成本最高的操作之一。change buffer 因为减少了随机磁盘访问，所以对更新性能的提升是会很明显的。
+将数据从磁盘读入内存涉及随机 IO 的访问，是数据库里面成本最高的操作之一。**change buffer 因为减少了随机磁盘访问，所以对更新性能的提升是会很明显的。**
 
 ##### change buffer 的使用场景
 
@@ -1111,7 +1113,7 @@ insert into t values(0,0,0),(5,5,5),
 
 ![image](https://mail.wangkekai.cn/1640320385021.jpg)
 
-这次 session A 用字段 c 来判断，加锁规则跟案例三唯一的不同是：在第一次用 c=10 定位记录的时候，索引 c 上加了 (5,10] 这个 next-key lock 后，由于索引 c 是非唯一索引，没有优化规则，也就是说不会蜕变为行锁，因此最终 sesion A 加的锁是，索引 c 上的 (5,10] 和 (10,15] 这两个 next-key lock。
+这次 session A 用字段 c 来判断，加锁规则跟案例三唯一的不同是：在第一次用 c=10 定位记录的时候，索引 c 上加了 (5,10] 这个 next-key lock 后，由于索引 c 是非唯一索引，没有优化规则，也就是说不会蜕变为行锁，因此最终 sesion A 加的锁是索引 c 上的 (5,10] 和 (10,15] 这两个 next-key lock。
 
 所以从结果上来看，sesson B 要插入（8,8,8) 的这个 insert 语句时就被堵住了。
 
@@ -1156,6 +1158,160 @@ mysql> insert into t values(30,10,30);
 3. 然后 session A 要再插入 (8,8,8) 这一行，被 session B 的间隙锁锁住。由于出现了死锁，InnoDB 让 session B 回滚。
 
 session B 的“加 next-key lock(5,10] ”操作，实际上分成了两步，先是加 (5,10) 的间隙锁，加锁成功；然后加 c=10 的行锁，这时候才被锁住的。
+
+### 5.4 insert语句的锁为什么这么多
+
+#### insert … select 语句
+
+```shell
+CREATE TABLE `t` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `c` int(11) DEFAULT NULL,
+  `d` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `c` (`c`)
+) ENGINE=InnoDB;
+ 
+insert into t values(null, 1,1);
+insert into t values(null, 2,2);
+insert into t values(null, 3,3);
+insert into t values(null, 4,4);
+ 
+create table t2 like t
+```
+
+为什么在可重复读隔离级别下，`binlog_format=statement` 时执行：
+
+```mysql
+insert into t2(c,d) select c,d from t;
+```
+
+这个语句时，需要对表 t 的所有行和间隙加锁呢？
+
+我们需要考虑的还是日志和数据的一致性。我们看下这个执行序列：
+![image](https://mail.wangkekai.cn/1023E734-4EB4-475D-A959-B2DBD54CE415.png)
+
+实际的执行效果是，如果 session B 先执行，由于这个语句对表 t 主键索引加了 (-∞,1] 这个 next-key lock，会在语句执行完成后，才允许 session A 的 insert 语句执行。
+
+但如果没有锁的话，就可能出现 session B 的 insert 语句先执行，但是后写入 binlog 的情况。于是，在 binlog_format=statement 的情况下，binlog 里面就记录了这样的语句序列：
+
+```mysql
+insert into t values(-1,-1,-1);
+insert into t2(c,d) select c,d from t;
+```
+
+这个语句到了备库执行，就会把 id=-1 这一行也写到表 t2 中，出现主备不一致。
+
+#### insert 循环写入
+
+> 当然了，执行 insert … select 的时候，对目标表也不是锁全表，而是只锁住需要访问的资源。
+
+如果现在有这么一个需求：要往表 t2 中插入一行数据，这一行的 c 值是表 t 中 c 值的最大值加 1。
+
+```mysql
+insert into t2(c,d)  (select c+1, d from t force index(c) order by c desc limit 1);
+```
+
+这个语句的加锁范围，就是表 t 索引 c 上的 (3,4] 和 (4,supremum] 这两个 next-key lock，以及主键索引上 id=4 这一行。  
+执行流程也比较简单，从表 t 中按照索引 c 倒序，扫描第一行，拿到结果写入到表 t2 中。**因此整条语句的扫描行数是 1。**
+
+这个语句执行的慢查询日志（slow log），如下图所示：
+![image](https://mail.wangkekai.cn/CCB97B5A-A6B6-4B0A-BD7B-8CA348016EF5.png)
+
+通过这个慢查询日志，我们看到 Rows_examined=1，正好验证了执行这条语句的扫描行数为 1。  
+那么，如果我们是要把这样的一行数据插入到表 t 中的话：
+
+```mysql
+insert into t(c,d)  (select c+1, d from t force index(c) order by c desc limit 1);
+```
+  
+再看慢查询日志就会发现不对了。
+![image](https://mail.wangkekai.cn/4E598533-58C8-4B5A-B351-F6ECD0032512.png)
+
+这时候的 Rows_examined 的值是 5。  
+下图就是这条语句的 explain 结果。
+![image](https://mail.wangkekai.cn/8F7B345D-476F-4101-AFBF-836E89F022D5.png)
+
+从 Extra 字段可以看到“Using temporary”字样，表示这个语句用到了临时表。也就是说，执行过程中，需要把表 t 的内容读出来，写入临时表。  
+实际上，Explain 结果里的 rows=1 是因为受到了 limit 1 的影响。
+
+下图是在执行这个语句前后查看 Innodb_rows_read 的结果。
+![image](https://mail.wangkekai.cn/4CC5E966-C0C5-4E60-98D5-63532249078E.png)
+
+这个语句执行前后，Innodb_rows_read 的值增加了 4。**因为默认临时表是使用 Memory 引擎的**，所以这 4 行查的都是表 t，也就是说对表 t 做了全表扫描。
+
+这样，我们就把整个执行过程理清楚了：
+
+1. 创建临时表，表里有两个字段 c 和 d。
+2. 按照索引 c 扫描表 t，依次取 c=4、3、2、1，然后回表，读到 c 和 d 的值写入临时表。这时，Rows_examined=4。
+3. 由于语义里面有 limit 1，所以只取了临时表的第一行，再插入到表 t 中。这时，`Rows_examined` 的值加 1，变成了 5。
+
+也就是说，这个语句会导致在表 t 上做全表扫描，并且会给索引 c 上的所有间隙都加上共享的 `next-key lock`。所以，这个语句执行期间，其他事务不能在这个表上插入数据。
+
+至于这个语句的执行为什么需要临时表，原因是这类一边遍历数据，一边更新数据的情况，如果读出来的数据直接写回原表，就可能在遍历过程中，读到刚刚插入的记录，新插入的记录如果参与计算逻辑，就跟语义不符。
+
+由于实现上这个语句没有在子查询中就直接使用 limit 1，从而导致了这个语句的执行需要遍历整个表 t。它的优化方法也比较简单，就是用前面介绍的方法，先 insert into 到临时表 temp_t，这样就只需要扫描一行；然后再从表 temp_t 里面取出这行数据插入表 t1。
+
+当然，由于这个语句涉及的数据量很小，你可以考虑使用内存临时表来做这个优化。使用内存临时表优化时，语句序列的写法如下：
+
+```mysql
+create temporary table temp_t(c int,d int) engine=memory;
+insert into temp_t  (select c+1, d from t force index(c) order by c desc limit 1);
+insert into t select * from temp_t;
+drop table temp_t;
+```
+
+#### insert 唯一键冲突
+
+![image](https://mail.wangkekai.cn/4A023A79-3B70-40DD-9275-CF85E0D04455.png)
+*唯一键冲突加锁*
+
+这个例子也是在可重复读（repeatable read）隔离级别下执行的。可以看到，session B 要执行的 insert 语句进入了锁等待状态。
+
+也就是说，session A 执行的 insert 语句，**发生唯一键冲突的时候，并不只是简单地报错返回，还在冲突的索引上加了锁**。前面说过，一个 next-key lock 就是由它右边界的值定义的。这时候，session A 持有索引 c 上的 (5,10] 共享 next-key lock（读锁）。
+
+> 官方文档有一个错误描述：如果冲突的是主键索引，就加记录锁，唯一索引才加 next-key lock。但实际上，这两类索引冲突加的都是 next-key lock。
+
+![image](https://mail.wangkekai.cn/CDD15DBB-88D4-4929-A7E0-6A57B90B4048.png)
+*唯一键冲突 -- 死锁*
+
+这个死锁产生的逻辑是这样的：
+
+1. 在 T1 时刻，启动 session A，并执行 insert 语句，此时在索引 c 的 c=5 上加了记录锁。注意，这个索引是唯一索引，因此退化为记录锁（可以回顾下第 21 篇文章介绍的加锁规则）。
+2. 在 T2 时刻，session B 要执行相同的 insert 语句，发现了唯一键冲突，加上读锁；同样地，session C 也在索引 c 上，c=5 这一个记录上，加了读锁。
+3. T3 时刻，session A 回滚。这时候，session B 和 session C 都试图继续执行插入操作，都要加上写锁。两个 session 都要等待对方的行锁，所以就出现了死锁。
+
+这个流程的状态变化图如下所示。
+
+![image](https://mail.wangkekai.cn/1FD61F9F-F699-462F-9C94-CC0C3858C26C.png)
+
+#### insert into … on duplicate key update
+
+上面这个例子是主键冲突后直接报错，如果是改写成
+
+```mysql
+insert into t values(11,10,10) on duplicate key update d=100;
+```
+
+的话，就会给索引 c 上 (5,10] 加一个排他的 next-key lock（写锁）。
+
+**insert into … on duplicate key update 这个语义的逻辑是，插入一行数据，如果碰到唯一键约束，就执行后面的更新语句。**
+
+> 注意，如果有多个列违反了唯一性约束，就会按照索引的顺序，修改跟第一个索引冲突的行。
+
+现在表 t 里面已经有了 (1,1,1) 和 (2,2,2) 这两行，我们再来看看下面这个语句执行的效果：
+![image](https://mail.wangkekai.cn/303DB865-C150-4866-BF77-9C3A3AC39145.png)
+
+可以看到，主键 id 是先判断的，**MySQL 认为这个语句跟 id=2 这一行冲突，所以修改的是 id=2 的行**。  
+需要注意的是，执行这条语句的 affected rows 返回的是 2，很容易造成误解。实际上，真正更新的只有一行，只是在代码实现上，insert 和 update 都认为自己成功了，update 计数加了 1， insert 计数也加了 1。
+
+#### 小结·
+
+insert … select 是很常见的在两个表之间拷贝数据的方法。需要注意，在可重复读隔离级别下，这个语句会给 select 的表里扫描到的记录和间隙加读锁。
+
+而如果 insert 和 select 的对象是同一个表，则有可能会造成循环写入。这种情况下，我们需要引入用户临时表来做优化。
+
+insert 语句如果出现唯一键冲突，会在冲突的唯一值上加共享的 next-key lock(S 锁)。因此，碰到由于唯一键约束导致报错后，要尽快提交或回滚事务，避免加锁时间过长。
 
 ## 6 | 为什么表数据删掉一半，表文件大小不变？
 
@@ -1889,7 +2045,7 @@ mysqlbinlog master.000001  --start-position=2738 --stop-position=2973 | mysql -h
 > 什么情况下双 M 结构会出现循环复制?
 
 - 一种场景是，在一个主库更新事务后，用命令 `set global server_id=x` 修改了 server_id。等日志再传回来的时候，发现 server_id 跟自己的 server_id 不同，就只能执行了。
-- 另一种场景是，有三个节点的时候，如图 7 所示，trx1 是在节点 B 执行的，因此 binlog 上的 server_id 就是 B，binlog 传给节点 A，然后 A 和 A’搭建了双 M 结构，就会出现循环复制。
+- 另一种场景是，有三个节点的时候，trx1 是在节点 B 执行的，因此 binlog 上的 server_id 就是 B，binlog 传给节点 A，然后 A 和 A’搭建了双 M 结构，就会出现循环复制。
 
 ### 12.2 MySQL是怎么保证高可用的
 
@@ -4614,161 +4770,7 @@ do {
 4. InnoDB 的 max_trx_id 递增值每次 MySQL 重启都会被保存起来，所以我们文章中提到的脏读的例子就是一个必现的 bug，好在留给我们的时间还很充裕。
 5. thread_id 是我们使用中最常见的，而且也是处理得最好的一个自增 id 逻辑了。
 
-## 22 | insert语句的锁为什么这么多
-
-### insert … select 语句
-
-```shell
-CREATE TABLE `t` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `c` int(11) DEFAULT NULL,
-  `d` int(11) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `c` (`c`)
-) ENGINE=InnoDB;
- 
-insert into t values(null, 1,1);
-insert into t values(null, 2,2);
-insert into t values(null, 3,3);
-insert into t values(null, 4,4);
- 
-create table t2 like t
-```
-
-为什么在可重复读隔离级别下，`binlog_format=statement` 时执行：
-
-```mysql
-insert into t2(c,d) select c,d from t;
-```
-
-这个语句时，需要对表 t 的所有行和间隙加锁呢？
-
-我们需要考虑的还是日志和数据的一致性。我们看下这个执行序列：
-![image](https://mail.wangkekai.cn/1023E734-4EB4-475D-A959-B2DBD54CE415.png)
-
-实际的执行效果是，如果 session B 先执行，由于这个语句对表 t 主键索引加了 (-∞,1] 这个 next-key lock，会在语句执行完成后，才允许 session A 的 insert 语句执行。
-
-但如果没有锁的话，就可能出现 session B 的 insert 语句先执行，但是后写入 binlog 的情况。于是，在 binlog_format=statement 的情况下，binlog 里面就记录了这样的语句序列：
-
-```mysql
-insert into t values(-1,-1,-1);
-insert into t2(c,d) select c,d from t;
-```
-
-这个语句到了备库执行，就会把 id=-1 这一行也写到表 t2 中，出现主备不一致。
-
-### insert 循环写入
-
-> 当然了，执行 insert … select 的时候，对目标表也不是锁全表，而是只锁住需要访问的资源。
-
-如果现在有这么一个需求：要往表 t2 中插入一行数据，这一行的 c 值是表 t 中 c 值的最大值加 1。
-
-```mysql
-insert into t2(c,d)  (select c+1, d from t force index(c) order by c desc limit 1);
-```
-
-这个语句的加锁范围，就是表 t 索引 c 上的 (3,4] 和 (4,supremum] 这两个 next-key lock，以及主键索引上 id=4 这一行。  
-执行流程也比较简单，从表 t 中按照索引 c 倒序，扫描第一行，拿到结果写入到表 t2 中。**因此整条语句的扫描行数是 1。**
-
-这个语句执行的慢查询日志（slow log），如下图所示：
-![image](https://mail.wangkekai.cn/CCB97B5A-A6B6-4B0A-BD7B-8CA348016EF5.png)
-
-通过这个慢查询日志，我们看到 Rows_examined=1，正好验证了执行这条语句的扫描行数为 1。  
-那么，如果我们是要把这样的一行数据插入到表 t 中的话：
-
-```mysql
-insert into t(c,d)  (select c+1, d from t force index(c) order by c desc limit 1);
-```
-  
-再看慢查询日志就会发现不对了。
-![image](https://mail.wangkekai.cn/4E598533-58C8-4B5A-B351-F6ECD0032512.png)
-
-这时候的 Rows_examined 的值是 5。  
-下图就是这条语句的 explain 结果。
-![image](https://mail.wangkekai.cn/8F7B345D-476F-4101-AFBF-836E89F022D5.png)
-
-从 Extra 字段可以看到“Using temporary”字样，表示这个语句用到了临时表。也就是说，执行过程中，需要把表 t 的内容读出来，写入临时表。  
-实际上，Explain 结果里的 rows=1 是因为受到了 limit 1 的影响。
-
-下图是在执行这个语句前后查看 Innodb_rows_read 的结果。
-![image](https://mail.wangkekai.cn/4CC5E966-C0C5-4E60-98D5-63532249078E.png)
-
-这个语句执行前后，Innodb_rows_read 的值增加了 4。**因为默认临时表是使用 Memory 引擎的**，所以这 4 行查的都是表 t，也就是说对表 t 做了全表扫描。
-
-这样，我们就把整个执行过程理清楚了：
-
-1. 创建临时表，表里有两个字段 c 和 d。
-2. 按照索引 c 扫描表 t，依次取 c=4、3、2、1，然后回表，读到 c 和 d 的值写入临时表。这时，Rows_examined=4。
-3. 由于语义里面有 limit 1，所以只取了临时表的第一行，再插入到表 t 中。这时，`Rows_examined` 的值加 1，变成了 5。
-
-也就是说，这个语句会导致在表 t 上做全表扫描，并且会给索引 c 上的所有间隙都加上共享的 `next-key lock`。所以，这个语句执行期间，其他事务不能在这个表上插入数据。
-
-至于这个语句的执行为什么需要临时表，原因是这类一边遍历数据，一边更新数据的情况，如果读出来的数据直接写回原表，就可能在遍历过程中，读到刚刚插入的记录，新插入的记录如果参与计算逻辑，就跟语义不符。
-
-由于实现上这个语句没有在子查询中就直接使用 limit 1，从而导致了这个语句的执行需要遍历整个表 t。它的优化方法也比较简单，就是用前面介绍的方法，先 insert into 到临时表 temp_t，这样就只需要扫描一行；然后再从表 temp_t 里面取出这行数据插入表 t1。
-
-当然，由于这个语句涉及的数据量很小，你可以考虑使用内存临时表来做这个优化。使用内存临时表优化时，语句序列的写法如下：
-
-```mysql
-create temporary table temp_t(c int,d int) engine=memory;
-insert into temp_t  (select c+1, d from t force index(c) order by c desc limit 1);
-insert into t select * from temp_t;
-drop table temp_t;
-```
-
-### insert 唯一键冲突
-
-![image](https://mail.wangkekai.cn/4A023A79-3B70-40DD-9275-CF85E0D04455.png)
-*唯一键冲突加锁*
-
-这个例子也是在可重复读（repeatable read）隔离级别下执行的。可以看到，session B 要执行的 insert 语句进入了锁等待状态。
-
-也就是说，session A 执行的 insert 语句，**发生唯一键冲突的时候，并不只是简单地报错返回，还在冲突的索引上加了锁**。前面说过，一个 next-key lock 就是由它右边界的值定义的。这时候，session A 持有索引 c 上的 (5,10] 共享 next-key lock（读锁）。
-
-> 官方文档有一个错误描述：如果冲突的是主键索引，就加记录锁，唯一索引才加 next-key lock。但实际上，这两类索引冲突加的都是 next-key lock。
-
-![image](https://mail.wangkekai.cn/CDD15DBB-88D4-4929-A7E0-6A57B90B4048.png)
-*唯一键冲突 -- 死锁*
-
-这个死锁产生的逻辑是这样的：
-
-1. 在 T1 时刻，启动 session A，并执行 insert 语句，此时在索引 c 的 c=5 上加了记录锁。注意，这个索引是唯一索引，因此退化为记录锁（可以回顾下第 21 篇文章介绍的加锁规则）。
-2. 在 T2 时刻，session B 要执行相同的 insert 语句，发现了唯一键冲突，加上读锁；同样地，session C 也在索引 c 上，c=5 这一个记录上，加了读锁。
-3. T3 时刻，session A 回滚。这时候，session B 和 session C 都试图继续执行插入操作，都要加上写锁。两个 session 都要等待对方的行锁，所以就出现了死锁。
-
-这个流程的状态变化图如下所示。
-
-![image](https://mail.wangkekai.cn/1FD61F9F-F699-462F-9C94-CC0C3858C26C.png)
-
-### insert into … on duplicate key update
-
-上面这个例子是主键冲突后直接报错，如果是改写成
-
-```mysql
-insert into t values(11,10,10) on duplicate key update d=100;
-```
-
-的话，就会给索引 c 上 (5,10] 加一个排他的 next-key lock（写锁）。
-
-**insert into … on duplicate key update 这个语义的逻辑是，插入一行数据，如果碰到唯一键约束，就执行后面的更新语句。**
-
-> 注意，如果有多个列违反了唯一性约束，就会按照索引的顺序，修改跟第一个索引冲突的行。
-
-现在表 t 里面已经有了 (1,1,1) 和 (2,2,2) 这两行，我们再来看看下面这个语句执行的效果：
-![image](https://mail.wangkekai.cn/303DB865-C150-4866-BF77-9C3A3AC39145.png)
-
-可以看到，主键 id 是先判断的，**MySQL 认为这个语句跟 id=2 这一行冲突，所以修改的是 id=2 的行**。  
-需要注意的是，执行这条语句的 affected rows 返回的是 2，很容易造成误解。实际上，真正更新的只有一行，只是在代码实现上，insert 和 update 都认为自己成功了，update 计数加了 1， insert 计数也加了 1。
-
-### 小结·
-
-insert … select 是很常见的在两个表之间拷贝数据的方法。需要注意，在可重复读隔离级别下，这个语句会给 select 的表里扫描到的记录和间隙加读锁。
-
-而如果 insert 和 select 的对象是同一个表，则有可能会造成循环写入。这种情况下，我们需要引入用户临时表来做优化。
-
-insert 语句如果出现唯一键冲突，会在冲突的唯一值上加共享的 next-key lock(S 锁)。因此，碰到由于唯一键约束导致报错后，要尽快提交或回滚事务，避免加锁时间过长。
-
-## 23 | 怎么最快地复制一张表？
+## 22 | 怎么最快地复制一张表？
 
 还是先创建一个表 db1.t，并插入 1000 行数据，同时创建一个相同结构的表 db2.t。
 
@@ -4946,7 +4948,7 @@ mysqlbinlog $binlog_file | mysql -h$host -P$port -u$user -p$pwd
 
 把日志直接解析出来发给目标库执行。增加 local，就能让这个方法支持非本地的 $host。
 
-## 24 | grant之后要跟着flush privileges吗？
+## 23 | grant之后要跟着flush privileges吗？
 
 grant 之后真的需要执行 flush privileges 吗？如果没有执行这个 flush 命令的话，赋权语句真的不能生效吗？
 
