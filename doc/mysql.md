@@ -1355,7 +1355,7 @@ insert 语句如果出现唯一键冲突，会在冲突的唯一值上加共享�
 
 你可以新建一个与表 A 结构相同的表 B，然后按照主键 ID 递增的顺序，把数据一行一行地从表 A 里读出来再插入到表 B 中。
 
-使用 `alter table A engine=InnoDB` 命令来重建表。在 MySQL 5.5 版本之前，这个命令的执行流程跟我们前面描述的差不多，区别只是这个临时表 B 不需要你自己创建，MySQL 会自动完成转存数据、交换表名、删除旧表的操作。**这个时候如果有新的插入或者更新会造成数据丢失**。
+**使用 `alter table A engine=InnoDB` 命令来重建表**。在 MySQL 5.5 版本之前，这个命令的执行流程跟我们前面描述的差不多，区别只是这个临时表 B 不需要你自己创建，MySQL 会自动完成转存数据、交换表名、删除旧表的操作。**这个时候如果有新的插入或者更新会造成数据丢失**。
 
 **在MySQL 5.6 版本开始引入的 Online DDL，对这个操作流程做了优化。**
 
@@ -1653,6 +1653,15 @@ select city,name,age from t where city='杭州' order by name limit 1000  ;
 
 Explain 的 Extra 这个字段中的“Using filesort”表示的就是需要排序, MySQL 会给每个线程分配一块内存用于排序，称为 `sort_buffer`。
 
+产生文件排序的原因：
+
+1. where 语句与 order by 语句，使用了不同的索引
+2. 检查的行数过多，且没有使用覆盖索引
+3. ORDER BY中的列不包含在相同的索引，也就是使用了不同的索引
+4. 对索引列同时使用了 ASC 和 DESC
+5. where 语句或者 ORDER BY 语句中索引列使用了表达式，包括函数表达式
+6. where 语句与 ORDER BY 语句组合满足最左前缀，但where语句中查找的是范围。
+
 排序语句执行顺序是：
 
 1. 初始化 sort_buffer ，确定放入对应字段;
@@ -1731,6 +1740,20 @@ select city, name, age from T where city = 'beijing' order by name limit 1000;
 3. 重复执行步骤 2，直到查到第 1000 条记录，或者是不满足 city='beijing’条件时循环结束。
 
 ### 9.2 显示随机消息继续排序介绍？
+
+使用临时表的场景
+
+1. 使用临时表的场景
+   1. ORDER BY 子句和 GROUP BY 子句不同， 例如：ORDERY BY price GROUP BY name；
+   2. 在 JOIN 查询中，ORDER BY 或者 GROUP BY 使用了不是第一个表的列 例如：SELECT * from TableA, TableB ORDER BY TableA.price GROUP by TableB.name（我在测试的时候发现即使是使用第一个表的列，也会使用到临时表）
+   3. ORDER BY 中使用了 DISTINCT 关键字 ORDERY BY DISTINCT(price)
+   4. SELECT 语句中指定了 SQL_SMALL_RESULT 关键字 SQL_SMALL_RESULT 的意思就是告诉 MySQL，结果会很小，请直接使用内存临时表，不需要使用索引排序 SQL_SMALL_RESULT必须和GROUP BY、DISTINCT或DISTINCTROW一起使用。一般情况下，我们没有必要使用这个选项，让MySQL服务器选择即可。
+   5. 当 group by 索引的时候，当数据量较小的时候不会使用临时表，当数据量（我测试的数据量在30万左右）大的时候会使用临时表
+   6. 当 group by 不是索引的时候会使用临时表。
+2. 直接使用磁盘临时表的场景
+   1. 表包含 TEXT 或者 BLOB 列；
+   2. GROUP BY 或者 DISTINCT 子句中包含长度大于512字节的列；
+   3. 使用 UNION 或者 UNION ALL 时，SELECT 子句中包含大于512字节的列。
 
 #### 内存临时表
 
