@@ -1,5 +1,7 @@
 # go
 
+[toc]
+
 ## 1. 常见基础题
 
 ### 1.1 make 和 new 的区别
@@ -296,9 +298,14 @@ func WithValue(parent Context, key, val interface{}) Context
 
 ### 1.7 接口
 
-### 1.8 channel
+## 2. channel
 
-#### 1.8.1 向通道发送数据
+### 介绍 channel
+
+Go 语言中，**不要通过共享内存来通信，而要通过通信来实现内存共享**。Go 的 `CSP`(Communicating Sequential Process)并发模型，中文叫做**通信顺序进程**，是通过 goroutine 和 channel 来实现的。
+**channel 收发遵循先进先出 FIFO，分为有缓存和无缓存**，channel 中大致有 `buffer`(当缓冲区大小部位 0 时，是个 `ring buffer`)、`sendx` 和 `recvx` 收发的位置(`ring buffer` 记录实现)、`sendq`、`recvq` 当前 channel 因为缓冲区不足而阻塞的队列、使用双向链表存储、还有一个 mutex 锁控制并发、其他原属等。
+
+### 2.1 向通道发送数据
 
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
@@ -318,14 +325,14 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 - **当缓冲区存在空余空间时**，将发送的数据写入 Channel 的缓冲区；
 - **当不存在缓冲区或者缓冲区已满时**，等待其他 Goroutine 从 Channel 接收数据；
 
-##### 1.8.1.1 发送数据
+#### 2.1.1 发送数据
 
 - 如果当前 Channel 的 `recvq` 上存在已经被阻塞的 Goroutine，那么会直接将数据发送给当前 Goroutine 并将其设置成下一个运行的 Goroutine,**也就是将接收方的 Goroutine 放到了处理器的 `runnext` 中，程序没有立刻执行该 Goroutine**
     > 向一个非缓冲型的 channel 发送数据、从一个无元素的（非缓冲型或缓冲型但空）的 channel 接收数据，都会导致一个 goroutine 直接操作另一个 goroutine 的栈, 由于 GC 假设对栈的写操作只能发生在 goroutine 正在运行中并且由当前 goroutine 来写, 所以这里实际上违反了这个假设。可能会造成一些问题，**所以需要用到写屏障来规避**
 - 如果 Channel 存在缓冲区并且其中还有空闲的容量，我们会直接将数据存储到缓冲区 `sendx` 所在的位置上；
 - 如果不满足上面的两种情况，会创建一个 `runtime.sudog` 结构并将其加入 Channel 的 `sendq` 队列中，当前 Goroutine 也会陷入阻塞等待其他的协程从 Channel 接收数据；
 
-#### 1.8.2 接收数据
+### 2.2 接收数据
 
 ```go
 func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool) {
@@ -366,7 +373,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 **无论发生哪种情况，运行时都会调用 `runtime.goready` 将当前处理器的 `runnext` 设置成发送数据的 Goroutine，在调度器下一次调度时将阻塞的发送方唤醒。**
 
-##### 1.8.2.1 从通道接收数据
+#### 2.2.1 从通道接收数据
 
 1. 如果 Channel 为空，那么会直接调用 `runtime.gopark` 挂起当前 Goroutine；
 2. 如果 Channel 已经关闭并且缓冲区没有任何数据，`runtime.chanrecv` 会直接返回；
@@ -374,7 +381,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 4. 如果 Channel 的缓冲区中包含数据，那么直接读取 `recvx` 索引对应的数据；
 5. 在默认情况下会挂起当前的 Goroutine，将 `runtime.sudog` 结构加入 `recvq` 队列并陷入休眠等待调度器的唤醒；
 
-#### 1.8.4、3 触发调度时机
+### 2.3 触发调度时机
 
 1. **发送数据时**
    1. 发送数据时发现 Channel 上存在等待接收数据的 Goroutine，立刻设置处理器的 `runnext` 属性，但是并不会立刻触发调度；
@@ -384,7 +391,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
    1. 当 Channel 为空时；
    2. 当缓冲区中不存在数据并且也不存在数据的发送者时；
 
-#### 1.8.3 最佳实践
+### 2.4 最佳实践
 
 - **读已经关闭的 `chan` 能⼀直读到东⻄，但是读到的内容根据通道内关闭前是否有元素⽽不同。**
    1. 如果 `chan` 关闭前，`buffer` 内有元素还未读, 会正确读到 `chan` 内的值，且返回的第⼆个 `bool` 值（是否读成功）为 `true`。
@@ -396,9 +403,28 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 - 向 `nil` 的通道发送或接收数据会调用 `gopark` 挂起，并陷入永久阻塞
 
-## 2. GC 垃圾回收
+## 3. defer
 
-### 2.1 GC 策略
+`defer` 关键字的实现跟 `go` 关键字很类似，不同的是它调⽤的是 `runtime.deferproc` ⽽不是 `runtime.newproc`。 在 `defer` 出现的地⽅，插⼊了指令 `call runtime.deferproc`，然后在函数返回之前的地⽅，插⼊指令 `call runtime.deferreturn`。 goroutine 的控制结构中，有⼀张表记录 `defer`，调⽤ `runtime.deferproc` 时会将需要 `defer` 的表达式记录在表中，⽽在调⽤ `runtime.deferreturn` 的时候，则会依次从 `defer` 表中出栈并执⾏。
+因此，题⽬最后输出顺序应该是 defer 定义顺序的倒序。 panic 错误并不能终⽌ defer 的执⾏。
+
+## 4. 内存分配
+
+### 4.x 内存逃逸
+
+**逃逸分析最基本的原则**: 编译器会分析代码的特征和代码生命周期，Go 中的变量只有在编译器可以证明在函数返回后不会再被引用的，才分配到栈上，其他情况下都是分配到堆上。
+
+*引起变量逃逸到堆上的典型情况*：
+
+- **在⽅法内把局部变量指针返回**, 局部变量原本应该在栈中分配，在栈中回收。但是由于返回时被外部引⽤，因此其⽣命周期⼤于栈，则溢出。
+- **发送指针或带有指针的值到 `channel` 中**。在编译时，是没有办法知道哪个 `goroutine` 会在 `channel` 上接收数据。所以编译器没法知道变量什么时候才会被释放。
+- **在⼀个切⽚上存储指针或带指针的值**。⼀个典型的例⼦就是 `[]*string`。这会导致切⽚的内容逃逸。尽管其后⾯的数组可能是在栈上分配的，但其引⽤的值⼀定是在堆上。
+- **`slice` 的背后数组被重新分配了，因为 `append` 时可能会超出其容量(`cap`)**。`slice` 初始化的地⽅在编译时是可以知道的，它最开始会在栈上分配。如果切⽚背后的存储要基于运⾏时的数据进⾏扩充，就会在堆上分配。
+- **在 `interface` 类型上调⽤⽅法**。在 `interface` 类型上调⽤⽅法都是动态调度的⽅法的真正实现只能在运⾏时知道。想像⼀个 `io.Reader` 类型的变量 `r` , 调⽤ `r.Read(b)` 会使得 `r` 的值和切⽚ `b` 的背后存储都逃逸掉，所以会在堆上分配。
+
+## 5. GC 垃圾回收
+
+### 5.1 GC 策略
 
 1. 内存达到上限触发 GC
 就像上面的 `GOGC` 配置那样，当程序达到驻留内存的相应倍数时候，触发 GC， 默认值就是两倍于当前内存。
@@ -410,16 +436,187 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 垃圾收集器关注的第二个指标是两个垃圾收集器之间的延迟。如果它没有被触发超过两分钟，一个循环将被强制。
 3. **主动触发**，上面两种是**被动触发**，通过调用 `runtime.GC` 来触发 GC，此调用阻塞式地等待当前 GC 运行完毕。
 
-### 2.2 GC 如何调优
+### 5.2 GC 如何调优
 
 - 通过 `go tool pprof` 和 `go tool trace` 等工具
 - 控制内存分配的速度，限制 goroutine 的数量，从而提高赋值器对 CPU 的利用率。
 - 减少并复用内存，例如使用 `sync.Pool` 来复用需要频繁创建临时对象，例如提前分配足够的内存来降低多余的拷贝。
 - 需要时，增大 `GOGC` 的值，降低 GC 的运行频率。
 
-## 3. GMP
+## 3. GMP&调度器
 
-### 3.1 schedule 调度
+### 3.1 goroutine 与线程有什么区别？
+
+- **内存占用**
+    创建一个 goroutine 的栈内存消耗为 2 KB，实际运行过程中，如果栈空间不够用，会自动进行扩容。创建一个 thread 则需要消耗 1 MB 栈内存，而且还需要一个被称为 “a guard page” 的区域用于和其他 thread 的栈空间进行隔离。
+
+    对于一个用 Go 构建的 HTTP Server 而言，对到来的每个请求，创建一个 goroutine 用来处理是非常轻松的一件事。而如果用一个使用线程作为并发原语的语言构建的服务，例如 Java 来说，每个请求对应一个线程则太浪费资源了，很快就会出 OOM 错误（OutOfMemoryError）。
+
+- **创建和销毀**
+    Thread 创建和销毀都会有巨大的消耗，因为要和操作系统打交道，是内核级的，通常解决的办法就是线程池。而 goroutine 因为是由 `Go runtime` 负责管理的，创建和销毁的消耗非常小，是用户态的。
+
+- **切换**
+    当 threads 切换时，需要保存各种寄存器，以便将来恢复：
+
+    而 goroutines 切换只需保存三个寄存器：Program Counter, Stack Pointer and BP。
+
+    一般而言，线程切换会消耗 1000-1500 纳秒，一个纳秒平均可以执行 12-18 条指令。所以由于线程切换，执行指令的条数会减少 12000-18000。
+
+    Goroutine 的切换约为 200 ns，相当于 2400-3600 条指令。
+
+    因此，goroutines 切换成本比 threads 要小得多。
+
+### 3.2 schedule 调度
+
+*`Runtime` 运行时维护所有的 `goroutines`，并通过 `scheduler` 来进行调度。`Goroutines` 和 `threads` 是独立的，但是 `goroutines` 要依赖 `threads` 才能执行。*
+
+#### 调度的核心思想
+
+- `reuse threads`
+- 限制同时运行（不包含阻塞）的线程数为 `N`，`N` 等于 CPU 的核心数目
+- 线程私有的 `runqueues`，并且可以从其他线程 stealing goroutine 来运行，线程阻塞后，可以将 `runqueues` 传递给其他线程。
+
+#### GMP
+
+- `g` 代表一个 goroutine，它包含：表示 goroutine 栈的一些字段，指示当前 `goroutine` 的状态，指示当前运行到的指令地址，也就是 PC 值。
+- `m` 表示操作系统内核线程，包含正在运行的 `goroutine` 等字段。
+- `p` 代表一个虚拟的 `Processor`，它维护一个处于 `Runnable` 状态的 `g` 队列，`m` 需要获得 `p` 才能运行 `g`。
+
+Go 程序启动后，会给每个逻辑核心分配一个 `P`（Logical Processor）；同时，会给每个 `P` 分配一个 `M`（Machine，表示内核线程），这些内核线程仍然由 `OS scheduler` 来调度。
+
+##### goroutine 状态
+
+- **等待中**：Goroutine 正在等待某些条件满足，例如：系统调用结束等，包括 `_Gwaiting`、`_Gsyscall` 和 `_Gpreempted` 几个状态；
+- **可运行**：Goroutine 已经准备就绪，可以在线程运行，如果当前程序中有非常多的 Goroutine，每个 Goroutine 就可能会等待更多的时间，即 `_Grunnable；`
+- **运行中**：Goroutine 正在某个线程上运行，即 `_Grunning`；
+
+#### M:N 模型
+
+Runtime 会在程序启动的时候，创建 `M` 个线程（CPU 执行调度的单位），之后创建的 `N` 个 goroutine 都会依附在这 `M` 个线程上执行。
+
+### 调度器启动
+
+**系统加载可执行文件大概都会经过这几个阶段：**
+
+1. 从磁盘上读取可执行文件，加载到内存
+2. 创建进程和主线程
+3. 为主线程分配栈空间
+4. 把由用户在命令行输入的参数拷贝到主线程的栈
+5. 把主线程放入操作系统的运行队列等待被调度
+
+通过 `runtime.schedinit` 初始化调度器，在调度器初始函数执行的过程中会将 `maxmcount` 设置成 10000，这也就是一个 Go 语言程序能够创建的最大线程数，虽然最多可以创建 10000 个线程，但是可以同时运行的线程还是由 `GOMAXPROCS` 变量控制。
+
+**最后调用 `runtime.procresize` 的执行过程如下**
+
+1. 如果全局变量 `allp` 切片中的处理器数量少于期望数量，会对切片进行扩容；
+2. 使用 `new` 创建新的处理器结构体并调用 `runtime.p.init` 初始化刚刚扩容的处理器；
+3. 通过指针将线程 `m0` 和处理器 `allp[0]` 绑定到一起；
+4. 调用 `runtime.p.destroy` 释放不再使用的处理器结构；
+5. 通过截断改变全局变量 `allp` 的长度保证与期望处理器数量相等；
+6. 将除 `allp[0]` 之外的处理器 `P` 全部设置成 `_Pidle` 并加入到全局的空闲队列中；
+
+### 3.x 创建 goroutine
+
+使用 Go 语言的 `go` 关键字，编译器会通过 `cmd/compile/internal/gc.state.stmt` 和 `cmd/compile/internal/gc.state.call` 两个方法将该关键字转换成 `runtime.newproc` 函数调用, 入参是参数大小和表示函数的指针 `funcval`，它会获取 Goroutine 以及调用方的程序计数器，然后调用 `runtime.newproc1` 函数获取新的 Goroutine 结构体、将其加入处理器的运行队列并在满足条件时调用 `runtime.wakep` 唤醒新的处理执行 Goroutine.
+
+`runtime.newproc1` 会根据传入参数初始化一个 `g` 结构体，我们可以将该函数分成以下几个部分介绍它的实现：
+
+1. 获取或者创建新的 Goroutine 结构体；
+2. 将传入的参数移到 Goroutine 的栈上；
+3. 更新 Goroutine 调度相关的属性；
+
+#### 初始化结构体
+
+`runtime.gfget` 通过两种不同的方式获取新的 `runtime.g`：
+
+1. 从 Goroutine 所在处理器的 `gFree` 列表或者调度器的 `sched.gFree` 列表中获取 `runtime.g`；
+   1. 当处理器的 Goroutine 列表为空时，会将调度器持有的空闲 Goroutine 转移到当前处理器上，直到 `gFree` 列表中的 Goroutine 数量达到 32；
+   2. 当处理器的 Goroutine 数量充足时，会从列表头部返回一个新的 Goroutine；
+2. 调用 `runtime.malg` 生成一个新的 `runtime.g` 并将结构体追加到全局的 Goroutine 列表 `allgs` 中。
+
+#### 运行队列
+
+**`runtime.runqput` 会将 Goroutine 放到运行队列上，这既可能是全局的运行队列，也可能是处理器本地的运行队列。**
+
+1. 当 `next` 为 `true` 时，将 Goroutine 设置到处理器的 `runnext` 作为下一个处理器执行的任务；
+2. 当 `next` 为 `false` 并且本地运行队列还有剩余空间时，将 Goroutine 加入处理器持有的本地运行队列；
+3. 当处理器的本地运行队列已经没有剩余空间时就会把本地队列中的一部分 Goroutine 和待加入的 Goroutine 通过 `runtime.runqputslow` 添加到调度器持有的全局运行队列上；
+
+**处理器本地的运行队列是一个使用数组构成的环形链表，它最多可以存储 256 个待执行任务。**
+
+### 调度循环
+
+调度器启动之后，Go 语言运行时会调用 `runtime.mstart` 以及 `runtime.mstart1`，前者会初始化 `g0` 的 `stackguard0` 和 `stackguard1` 字段，后者会初始化线程并调用 `runtime.schedule` 进入调度循环。
+
+**`runtime.schedule` 函数会从下面几个地方查找待执行的 Goroutine：**
+
+1. 为了保证公平，当全局运行队列中有待执行的 Goroutine 时，通过 `schedtick` 保证有一定几率会从全局的运行队列中查找对应的 Goroutine；
+2. 从处理器本地的运行队列中查找待执行的 Goroutine；
+3. 如果前两种方法都没有找到 Goroutine，会通过 `runtime.findrunnable` 进行阻塞地查找 Goroutine；
+
+`runtime.findrunnable` 的实现非常复杂，通过以下的过程获取可运行的 Goroutine：
+
+1. 从本地运行队列、全局运行队列中查找；
+2. 从网络轮询器中查找是否有 Goroutine 等待运行；
+3. 通过 `runtime.runqsteal` 尝试从其他随机的处理器中窃取待运行的 Goroutine，该函数还可能窃取处理器的计时器；
+
+### 3.x 触发调度
+
+![image](https://mail.wangkekai.cn/1641112475515.jpg)
+
+除了上图中可能触发调度的时间点，运行时还会在线程启动 `runtime.mstart` 和 Goroutine 执行结束 `runtime.goexit0` 触发调度。我们在这里会重点介绍运行时触发调度的几个路径：
+
+1. **主动挂起** — `runtime.gopark` -> `runtime.park_m`
+2. **系统调用** — `runtime.exitsyscall` -> `runtime.exitsyscall0`
+3. **协作式调度** — `runtime.Gosched` -> `runtime.gosched_m` -> `runtime.goschedImpl`
+4. **系统监控** — `runtime.sysmon` -> `runtime.retake` -> `runtime.preemptone`
+
+#### 主动挂起
+
+1. `runtime.gopark` 是触发调度最常见的方法，该函数会将当前 Goroutine 暂停，被暂停的任务不会放回运行队列
+2. 然后通过 r`untime.mcal`l 切换到 `g0` 的栈上调用 `runtime.park_m`：
+    `runtime.park_m` 会将当前 Goroutine 的状态从 `_Grunning` 切换至 `_Gwaiting`，调用 `runtime.dropg` 移除线程和 Goroutine 之间的关联，在这之后就可以调用 `runtime.schedule` 触发新一轮的调度了。
+3. 当 Goroutine 等待的特定条件满足后，运行时会调用 `runtime.goready` 将因为调用 `runtime.gopark` 而陷入休眠的 Goroutine 唤醒。
+4. `runtime.ready` 会将准备就绪的 Goroutine 的状态切换至 `_Grunnable` 并将其加入处理器的运行队列中，等待调度器的调度。
+
+#### 系统调用
+
+第一步在通过汇编指令 `INVOKE_SYSCALL` 执行系统调用前后，上述函数会调用运行时的 `runtime.entersyscall` 和 `runtime.exitsyscall`，**正是这一层包装能够在陷入系统调用前触发运行时的准备和清理工作**。
+
+1. `runtime.entersyscall` 会在获取当前程序计数器和栈位置之后调用 `runtime.reentersyscall`，它会完成 Goroutine 进入系统调用前的准备工作
+   1. 禁止线程上发生的抢占，防止出现内存不一致的问题；
+   2. 保证当前函数不会触发栈分裂或者增长；
+   3. 保存当前的程序计数器 PC 和栈指针 SP 中的内容；
+   4. 将 Goroutine 的状态更新至 `_Gsyscall`
+   5. 将 Goroutine 的处理器和线程暂时分离并更新处理器的状态到 `_Psyscall`；
+   6. 释放当前线程上的锁；
+
+   不过出于性能的考虑，如果这次系统调用不需要运行时参与，就会使用 `syscall.RawSyscall` 简化这一过程，不再调用运行时函数
+2. 当系统调用结束后，会调用退出系统调用的函数 `runtime.exitsyscall` 为当前 Goroutine 重新分配资源
+   1. 调用 `runtime.exitsyscallfast`；
+       - 如果 Goroutine 的原处理器处于 `_Psyscall` 状态，会直接调用 `wirep` 将 Goroutine 与处理器进行关联；
+       - 如果调度器中存在闲置的处理器，会调用 `runtime.acquirep` 使用闲置的处理器处理当前 Goroutine
+   2. 切换至调度器的 Goroutine 并调用 `runtime.exitsyscall0`；
+        另一个相对较慢的路径 `runtime.exitsyscall0` 会将当前 Goroutine 切换至 `_Grunnable` 状态，并移除线程 `M` 和当前 Goroutine 的关联：
+
+      - 当我们通过 `runtime.pidleget` 获取到闲置的处理器时就会在该处理器上执行 Goroutine；
+      - 在其它情况下，我们会将当前 Goroutine 放到全局的运行队列中，等待调度器的调度
+
+#### 协作式调度
+
+`runtime.Gosched` 函数会主动让出处理器，允许其他 Goroutine 运行。该函数无法挂起 Goroutine，调度器可能会将当前 Goroutine 调度到其他线程上：
+
+经过连续几次跳转，我们最终在 `g0` 的栈上调用 `runtime.goschedImpl`，运行时会更新 Goroutine 的状态到 `_Grunnable`，让出当前的处理器并将 Goroutine 重新放回全局队列，在最后，该函数会调用 `runtime.schedule` 触发调度。
+
+### 线程管理
+
+Go 语言的运行时会通过调度器改变线程的所有权，它也提供了 `runtime.LockOSThread` 和 `runtime.UnlockOSThread` 让我们有能力绑定 Goroutine 和线程完成一些比较特殊的操作。
+
+- Go 语言的运行时会通过 `runtime.startm` 启动线程来执行处理器 `P`，如果我们在该函数中没能从闲置列表中获取到线程 `M` 就会调用 `runtime.newm` 创建新的线程;
+- 创建新的线程需要使用如下所示的 `runtime.newosproc`，该函数在 Linux 平台上会通过系统调用 clone 创建新的操作系统线程，它也是创建线程链路上距离操作系统最近的 Go 语言函数
+- 使用系统调用 `clone` 创建的线程会在线程主动调用 `exit`、或者传入的函数 `runtime.mstart` 返回会主动退出，`runtime.mstart` 会执行调用 `runtime.newm` 时传入的匿名函数 `fn`，到这里也就完成了从线程创建到销毁的整个闭环。
+
+### 调度概览
 
 - 为了保证调度的公平性，**每个工作线程每进行 61 次调度就需要优先从全局运行队列中获取 goroutine 出来运行**
     因为如果只调度本地运行队列中的 goroutine，则全局运行队列中的 goroutine 有可能得不到运行
@@ -427,23 +624,87 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 - _如果从全局队列没有获取到 goroutine_，从与 `m` 关联的 `p` 的本地运行队列中获取 goroutine
 - **如果从本地运行队列和全局运行队列都没有找到需要运行的goroutine， 则调用 `findrunnable` 函数从其它工作线程的运行队列中偷取**，如果偷取不到，则当前工作线程进入睡眠，直到获取到需要运行的 goroutine 之后 findrunnable 函数才会返回。
 
+#### 3.2 从全局队列获取 goroutine
+
+- ⾸先 `globrunqget` 函数会根据全局运⾏队列中 goroutine 的数量，函数参数 `max` 以及 `_p_`的本地队列的容量计算出到底应该拿多少个 goroutine
+- 然后把第⼀个 `g` 结构体对象通过返回值的⽅式返回给调⽤函数，其它的则通过 `runqput` 函数放⼊当前⼯作线程的本地运⾏队列。
+*计算应该从全局运⾏队列中拿⾛多少个 goroutine 时根据 p 的数量（gomaxprocs）做了负载均衡。*
+- 如果没有从全局运⾏队列中获取到 goroutine，那么接下来就在⼯作线程的本地运⾏队列中寻找需要运⾏的goroutine。
+
+#### 3.3 从⼯作线程本地运⾏队列中获取 goroutine
+
+```go
+func runqget(_p_ *p) (gp *g, inheritTime bool) {
+    // If there's a runnext, it's the next G to run.
+    for {
+        next := _p_.runnext
+        if next == 0 {
+            break
+        }
+        if _p_.runnext.cas(next, 0) {
+            return next.ptr(), true
+        }
+    }
+
+    for {
+        h := atomic.LoadAcq(&_p_.runqhead) // load-acquire, synchronize with other consumers
+        t := _p_.runqtail
+        if t == h {
+            return nil, false
+        }
+        gp := _p_.runq[h%uint32(len(_p_.runq))].ptr()
+        if atomic.CasRel(&_p_.runqhead, h, h+1) { // cas-release, commits consume
+            return gp, false
+        }
+    }
+}
+```
+
+⼯作线程的本地运⾏队列分为两个部分
+
+- ⼀部分是由 `p` 的 `runq`、`runqhead` 和 `runqtail` 这三个成员组成的⼀个⽆锁循环队列，**该队列最多可包含 256 个 goroutine**；
+- 另⼀部分是 `p` 的 `runnext` 成员，它是⼀个指向 `g` 结构体对象的指针，**它最多只包含⼀个 goroutine**。
+
+从本地运⾏队列中寻找 goroutine 是通过 `runqget` 函数完成的，寻找时代码⾸先查看 `runnext` 成员是否为空，如果不为空则返回 `runnext` 所指的 goroutine，并把 `runnext` 成员清零，如果 `runnext` 为空，则继续从循环队列中查找 goroutine。
+
+1. **⾸先需要注意的是不管是从 `runnext` 还是从循环队列中拿取 goroutine 都使⽤了 `cas` 操作**，这⾥的  `cas` 操作是必需的，因为可能有其他⼯作线程此时此刻也正在访问这两个成员，从这⾥偷取可运⾏的 goroutine。
+2. 其次，代码中对 `runqhead` 的操作使⽤了 `atomic.LoadAcq` 和 `atomic.CasRel`，它们分别提供了 `load-acquire` 和 `cas-release` 语义。
+
+对于 `atomic.LoadAcq` 来说，其语义主要包含如下⼏条：
+
+- **原⼦读取**，也就是说不管代码运⾏在哪种平台，保证在读取过程中不会有其它线程对该变量进⾏写⼊；
+- 位于 `atomic.LoadAcq` 之后的代码，对内存的读取和写⼊必须在 `atomic.LoadAcq` 读取完成后才能执⾏，编译器和 CPU 都不能打乱这个顺序；
+- 当前线程执⾏ `atomic.LoadAcq` 时可以读取到其它线程最近⼀次通过 `atomic.CasRel` 对同⼀个变量写⼊的值，与此同时，位于 `atomic.LoadAcq` 之后的代码，不管读取哪个内存地址中的值，都可以读取到其它线程中位于 `atomic.CasRel`（对同⼀个变量操作）之前的代码最近⼀次对内存的写⼊。
+
+对于 `atomic.CasRel` 来说，其语义主要包含如下⼏条：
+
+- 原⼦的执⾏⽐较并交换的操作；
+- 位于 `atomic.CasRel` 之前的代码，对内存的读取和写⼊必须在 `atomic.CasRel` 对内存的写⼊之前完成，编译器和 CPU 都不能打乱这个顺序；
+- 线程执⾏ `atomic.CasRel` 完成后其它线程通过 `atomic.LoadAcq` 读取同⼀个变量可以读到最新的值，与此同时，位于 `atomic.CasRel` 之前的代码对内存写⼊的值，可以被其它线程中位于 `atomic.LoadAcq` （对同⼀个变量操作）之后的代码读取到。
+
+*因为可能有多个线程会并发的修改和读取 `runqhead`，以及需要依靠 `runqhead` 的值来读取 `runq` 数组的元素，所以需要使⽤ `atomic.LoadAcq` 和 `atomic.CasRel` 来保证上述语义。*
+
+**为什么读取 p 的 `runqtail` 成员不需要使⽤ `atomic.LoadAcq` 或 `atomic.load`？**
+因为 `runqtail` 不会被其它线程修改，只会被当前⼯作线程修改，此时没有⼈修改它，所以也就不需要使⽤原⼦相关的操作。
+
 ### 3.x 经典例题
 
-1. **例1**:
+#### 正在执行的 goroutine 什么情况下让出执行权
 
-    **正在被执⾏的 goroutine 发⽣以下情况时让出当前 goroutine 的执⾏权，并调度后⾯的goroutine 执⾏**：
+**正在被执⾏的 goroutine 发⽣以下情况时让出当前 goroutine 的执⾏权，并调度后⾯的goroutine 执⾏**：
 
-    - **IO 操作**
-    - **Channel 阻塞**
-    - **system call**
-    - **运⾏较⻓时间**
+- **IO 操作**
+- **Channel 阻塞**
+- **system call**
+- **运⾏较⻓时间**
 
-    如果⼀个 goroutine 执⾏时间太⻓，`scheduler` 会在其 `G` 对象上打上⼀个标志（preempt），当这个 goroutine 内部发⽣函数调⽤的时候，会先主动检查这个标志，如果为 `true` 则会让出执⾏权。
-    **main 函数⾥启动的 goroutine 其实是⼀个没有 IO 阻塞、没有 Channel 阻塞、没有system call、没有函数调⽤的死循环**。
-    也就是，它⽆法主动让出⾃⼰的执⾏权，即使已经执⾏很⻓时间，`scheduler` 已经标志了 `preempt`。
-    ⽽ golang 的 GC 动作是需要所有正在运⾏ goroutine 都停⽌后进⾏的。因此，程序会卡在 `runtime.GC()` 等待所有协程退出。
+如果⼀个 goroutine 执⾏时间太⻓，`scheduler` 会在其 `G` 对象上打上⼀个标志（preempt），当这个 goroutine 内部发⽣函数调⽤的时候，会先主动检查这个标志，如果为 `true` 则会让出执⾏权。
 
-2. **例2:**
+**main 函数⾥启动的 goroutine 其实是⼀个没有 IO 阻塞、没有 Channel 阻塞、没有system call、没有函数调⽤的死循环**。
+
+也就是，它⽆法主动让出⾃⼰的执⾏权，即使已经执⾏很⻓时间，`scheduler` 已经标志了 `preempt`。⽽ golang 的 GC 动作是需要所有正在运⾏ goroutine 都停⽌后进⾏的。因此，程序会卡在 `runtime.GC()` 等待所有协程退出。
+
+#### 优先调度
 
 ```go
 func main() {
@@ -467,8 +728,3 @@ func main() {
 ```
 
 这个输出结果决定来⾃于调度器优先调度哪个 `G`。从 `runtime` 的源码可以看到，**当创建⼀个 `G` 时，会优先放⼊到下⼀个调度的 `runnext` 字段上作为下⼀次优先调度的 `G`。因此，最先输出的是最后创建的 `G`**，也就是9.
-
-## 4. defer
-
-`defer` 关键字的实现跟 `go` 关键字很类似，不同的是它调⽤的是 `runtime.deferproc` ⽽不是 `runtime.newproc`。 在 `defer` 出现的地⽅，插⼊了指令 `call runtime.deferproc`，然后在函数返回之前的地⽅，插⼊指令 `call runtime.deferreturn`。 goroutine 的控制结构中，有⼀张表记录 `defer`，调⽤ `runtime.deferproc` 时会将需要 `defer` 的表达式记录在表中，⽽在调⽤ `runtime.deferreturn` 的时候，则会依次从 `defer` 表中出栈并执⾏。
-因此，题⽬最后输出顺序应该是 defer 定义顺序的倒序。 panic 错误并不能终⽌ defer 的执⾏。
