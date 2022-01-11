@@ -14,9 +14,33 @@
 
 - MySQL 5.6 版本开始引入的 `Online DDL`
 
+- MySQL 5.5 版本中引入了 `MDL`
+
+- MySQL 5.6.6 版本开始，`innodb_file_per_table` 默认值就是 ON 了
+
+- 截止到 MySQL 8.0，添加全文索引（FULLTEXT index）和空间索引 (SPATIAL index) 是 inplace 的 DDL，但不是 Online 的。
+
+- MySQL 5.6 版本引入的一个新的排序算法，即：优先队列排序算法
+
+- MySQL 5.6 版本引入了 GTID，**GTID 的全称是 Global Transaction Identifier，也就是全局事务 ID**
+
+- MySQL 5.7 及之前的版本，自增值保存在内存里，并没有持久化
+
+
+
 ### 5.7 <
 
+- MySQL 5.7 或更新版本，可以在每次执行一个比较大的操作后，通过执行 `mysql_reset_connection` 来重新初始化连接资源。这个过程不需要重连和重新做权限验证，但是会将连接恢复到刚刚创建完时的状态。
+
 ### 8.0
+
+- 需要注意的是，MySQL 8.0 版本直接将查询缓存的整块功能删掉了，也就是说 8.0 开始彻底没有这个功能了。
+
+    ```mysql
+    select SQL_CACHE * from T where ID=10；
+    ```
+
+- MySQL 8.0 中，`innodb_flush_neighbors` 参数的默认值已经是 0 了
 
 ## redis
 

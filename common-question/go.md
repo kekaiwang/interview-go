@@ -56,147 +56,21 @@
 - 当函数（func）值如果都是零，则是深度相等；否则就不是深度相等。
 - 当接口（interface）值如果持有深度相等的具体值，则深度相等。
 
-### 1.4 select
+### 1.4 gin 框架优势
 
-golang 的 select 就是监听 IO 操作，当 IO 操作发生时，触发相应的动作每个case语句里必须是一个IO操作，确切的说，应该是一个面向 channel 的IO操作。
+- **快速轻量**，基于 Radix 树的路由，小内存占用。没有反射。可预测的 API 性能。
 
-1. select 语句只能用于信道的读写操作
-2. select 中的 case 条件(非阻塞)是并发执行的，select 会选择先操作成功的那个 case 条件去执行，**如果多个同时返回，则随机选择一个执行**，此时将无法保证执行顺序。对于阻塞的 case 语句会直到其中有信道可以操作，如果有多个信道可操作，会随机选择其中一个 case 执行
-3. 对于 case 条件语句中，如果存在通道值为 `nil` 的读写操作（也就是 `var chan int`），则该分支将被忽略，可以理解为从 `select` 语句中删除了这个 `case` 语句; **并且会报 deadlock**
-4. 如果有超时条件语句，`case <-time.After(2 * time.Second)`，判断逻辑为如果在这个时间段内一直没有满足条件的 case,则执行这个超时 case。如果此段时间内出现了可操作的 case,则直接执行这个 case。一般用超时语句代替了 default 语句
-5. 对于空的 select{}，会引起死锁
-6. 对于 for 中的 select{}, 也有可能会引起cpu占用过高的问题，比如增加一个监听退出信号的case 当前是处于阻塞状态，又加一个 default 分支什么都不做，这时候就会莫名拉高 cpu
+- **支持中间件**，新建一个中间件非常简单，传入的 HTTP 请求可以由一系列中间件和最终操作来处理。例如：Logger，Authorization，GZIP，最终操作 DB。
 
-#### 1.4.1 直接阻塞
+- **Crash 处理**，Gin 可以 catch 一个发生在 HTTP 请求中的 panic 并 recover 它。这样，你的服务器将始终可用。例如，你可以向 Sentry 报告这个 panic！
 
-**空的 select 语句会直接阻塞当前 Goroutine，导致 Goroutine 进入无法被唤醒的永久休眠状态。**
-当 select 结构中不包含任何 case。它直接将类似 `select {}` 的语句转换成调用 `runtime.block` 函数：
-`runtime.block` 的实现非常简单，它会调用 `runtime.gopark` 让出当前 Goroutine 对处理器的使用权并传入等待原因 `waitReasonSelectNoCases`。
+- **JSON 验证**，Gin 可以解析并验证请求的 JSON，例如检查所需值的存在。
 
-#### 1.4.2 单一管道
+- **路由组**，更好地组织路由。是否需要授权，不同的 API 版本…… 此外，这些组可以无限制地嵌套而不会降低性能。
 
-如果当前的 select 条件只包含一个 `case`，那么编译器会将 select 改写成 `if` 条件语句。
-**当 case 中的 Channel 是空指针时，会直接挂起当前 Goroutine 并陷入永久休眠。**
+- **错误管理**，Gin 提供了一种方便的方法来收集 HTTP 请求期间发生的所有错误。最终，中间件可以将它们写入日志文件，数据库并通过网络发送。
 
-```go
-// 改写前
-select {
-case v, ok <-ch: // case ch <- v
-    ...    
-}
-
-// 改写后
-if ch == nil {
-    block()
-}
-v, ok := <-ch // case ch <- v
-...
-
-func block() {
-    gopark(nil, nil, waitReasonSelectNoCases, traceEvGoStop, 1)
-}
-```
-
-#### 1.4.3 非阻塞操作
-
-当 select 中仅包含两个 `case`，并且其中一个是 `default` 时，Go 语言的编译器就会认为这是一次非阻塞的收发操作
-
-##### 发送
-
-首先是 Channel 的发送过程，当 `case` 中表达式的类型是 `OSEND` 时，编译器会使用条件语句和 `runtime.selectnbsend` 函数改写代码：
-
-```go
-select {
-case ch <- i:
-    ...
-default:
-    ...
-}
-
-if selectnbsend(ch, i) {
-    ...
-} else {
-    ...
-}
-
-func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
-    return chansend(c, elem, false, getcallerpc())
-}
-```
-
-这段代码中最重要的就是 `runtime.selectnbsend`，它为我们提供了向 Channel 非阻塞地发送数据的能力。向 Channel 发送数据的 `runtime.chansend` 函数包含一个 `block` 参数，该参数会决定这一次的发送是不是阻塞的;
-**由于我们向 `runtime.chansend` 函数传入了非阻塞，所以在不存在接收方或者缓冲区空间不足时，当前 Goroutine 都不会阻塞而是会直接返回。**
-
-##### 接收
-
-返回值数量不同会导致使用函数的不同，两个用于非阻塞接收消息的函数 `runtime.selectnbrecv` 和 `runtime.selectnbrecv2` 只是对 `runtime.chanrecv` 返回值的处理稍有不同。
-因为接收方不需要，所以 `runtime.selectnbrecv` 会直接忽略返回的布尔值，而 `runtime.selectnbrecv2` 会将布尔值回传给调用方。
-**与 `runtime.chansend` 一样，`runtime.chanrecv` 也提供了一个 block 参数用于控制这次接收是否阻塞。**
-
-```go
-func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
-    selected, _ = chanrecv(c, elem, false)
-    return
-}
-
-func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool) {
-    selected, *received = chanrecv(c, elem, false)
-    return
-}
-```
-
-#### 1.4.4 常见流程
-
-在默认的情况下，编译器会使用如下的流程处理 select 语句：
-
-1. 将所有的 case 转换成包含 Channel 以及类型等信息的 `runtime.scase` 结构体；
-2. 调用运行时函数 `runtime.selectgo` 从多个准备就绪的 Channel 中选择一个可执行的 `runtime.scase` 结构体；
-3. 通过 `for` 循环生成一组 `if` 语句，在语句中判断自己是不是被选中的 case；
-
-##### 初始化
-
-`runtime.selectgo` 函数首先会进行执行必要的初始化操作并决定处理 `case` 的两个顺序 — **轮询顺序 `pollOrder` 和加锁顺序 `lockOrder`**：
-
-- **轮询顺序**：通过 `runtime.fastrandn` 函数引入随机性；
-- **加锁顺序**：按照 `Channel` 的地址排序后确定加锁顺序；
-
-**随机的轮询顺序可以避免 Channel 的饥饿问题，保证公平性；而根据 Channel 的地址顺序确定加锁顺序能够避免死锁的发生**。这段代码最后调用的 `runtime.sellock` 会按照之前生成的加锁顺序锁定 `select` 语句中包含所有的 Channel。
-
-##### 循环
-
-当我们为 select 语句锁定了所有 `Channel` 之后就会进入 `runtime.selectgo` 函数的主循环，它会分三个阶段查找或者等待某个 `Channel` 准备就绪：
-
-1. 查找是否已经存在准备就绪的 `Channel`，即可以执行收发操作；
-    **主要职责是查找所有 `case` 中是否有可以立刻被处理的 Channel**。无论是在等待的 Goroutine 上还是缓冲区中，只要存在数据满足条件就会立刻处理，如果不能立刻找到活跃的 Channel 就会进入循环的下一阶段，按照需要将当前 Goroutine 加入到 Channel 的 `sendq` 或者 `recvq` 队列中
-2. 将当前 Goroutine 加入 `Channel` 对应的收发队列上并等待其他 Goroutine 的唤醒；
-3. 当前 Goroutine 被唤醒之后找到满足条件的 `Channel` 并进行处理；
-
-`runtime.selectgo` 函数会根据不同情况通过 goto 语句跳转到函数内部的不同标签执行相应的逻辑，其中包括：
-
-1. `bufrecv`：可以从缓冲区读取数据；
-2. `bufsend`：可以向缓冲区写入数据；
-3. `recv`：可以从休眠的发送方获取数据；
-4. `send`：可以向休眠的接收方发送数据；
-5. `rclose`：可以从关闭的 Channel 读取 EOF；
-6. `sclose`：向关闭的 Channel 发送数据；
-7. `retc`：结束调用并返回；
-
-我们先来分析循环执行的第一个阶段，**查找已经准备就绪的 Channel**。循环会遍历所有的 `case` 并找到需要被唤起的 `runtime.sudog` 结构，在这个阶段，我们会根据 `case` 的四种类型分别处理：
-
-1. 当 `case` 不包含 `Channel` 时；
-   - 这种 `case` 会被跳过；
-2. 当 `case` 会从 `Channel` 中接收数据时；
-   - 如果当前 `Channel` 的 `sendq` 上有等待的 Goroutine，就会跳到 `recv` 标签并从缓冲区读取数据后将等待 Goroutine 中的数据放入到缓冲区中相同的位置；
-   - 如果当前 `Channel` 的缓冲区不为空，就会跳到 `bufrecv` 标签处从缓冲区获取数据；
-   - 如果当前 `Channel` 已经被关闭，就会跳到 `rclose` 做一些清除的收尾工作；
-3. 当 `case` 会向 `Channel` 发送数据时；
-   - 如果当前 `Channel` 已经被关，闭就会直接跳到 `sclose` 标签，触发 `panic` 尝试中止程序；
-   - 如果当前 `Channel` 的 `recvq` 上有等待的 Goroutine，就会跳到 `send` 标签向 Channel 发送数据；
-   - 如果当前 `Channel` 的缓冲区存在空闲位置，就会将待发送的数据存入缓冲区；
-4. 当 `select` 语句中包含 `default` 时；
-   - 表示前面的所有 `case` 都没有被执行，这里会解锁所有 `Channel` 并返回，意味着当前 `select` 结构中的收发都是非阻塞的；
-
-**除了将当前 Goroutine 对应的 `runtime.sudog` 结构体加入队列之外，这些结构体都会被串成链表附着在 Goroutine 上。在入队之后会调用 `runtime.gopark` 挂起当前 Goroutine 等待调度器的唤醒。**
+- **内置渲染**，Gin 为 JSON，XML 和 HTML 渲染提供了易于使用的 API。
 
 ### 1.5 context
 
@@ -252,8 +126,208 @@ func WithValue(parent Context, key, val interface{}) Context
 - 不要把本应该作为函数参数的类型塞到 context 中，context 存储的应该是一些共同的数据。例如：登陆的 session、cookie 等。
 - 同一个 context 可能会被传递到多个 goroutine，别担心，context 是并发安全的。
 
+## 4 select
+
+golang 的 select 就是监听 IO 操作，当 IO 操作发生时，触发相应的动作每个case语句里必须是一个IO操作，确切的说，应该是一个面向 channel 的IO操作。
+
+1. select 语句只能用于信道的读写操作
+2. select 中的 case 条件(非阻塞)是并发执行的，select 会选择先操作成功的那个 case 条件去执行，**如果多个同时返回，则随机选择一个执行**，此时将无法保证执行顺序。对于阻塞的 case 语句会直到其中有信道可以操作，如果有多个信道可操作，会随机选择其中一个 case 执行
+3. 对于 case 条件语句中，如果存在通道值为 `nil` 的读写操作（也就是 `var chan int`），则该分支将被忽略，可以理解为从 `select` 语句中删除了这个 `case` 语句; **并且会报 deadlock**
+4. 如果有超时条件语句，`case <-time.After(2 * time.Second)`，判断逻辑为如果在这个时间段内一直没有满足条件的 case,则执行这个超时 case。如果此段时间内出现了可操作的 case,则直接执行这个 case。一般用超时语句代替了 default 语句
+5. 对于空的 select{}，会引起死锁
+6. 对于 for 中的 select{}, 也有可能会引起cpu占用过高的问题，比如增加一个监听退出信号的case 当前是处于阻塞状态，又加一个 default 分支什么都不做，这时候就会莫名拉高 cpu
+
+### 4.1 直接阻塞
+
+**空的 select 语句会直接阻塞当前 Goroutine，导致 Goroutine 进入无法被唤醒的永久休眠状态。**
+当 select 结构中不包含任何 case。它直接将类似 `select {}` 的语句转换成调用 `runtime.block` 函数：
+`runtime.block` 的实现非常简单，它会调用 `runtime.gopark` 让出当前 Goroutine 对处理器的使用权并传入等待原因 `waitReasonSelectNoCases`。
+
+### 4.2 单一管道
+
+如果当前的 select 条件只包含一个 `case`，那么编译器会将 select 改写成 `if` 条件语句。
+**当 case 中的 Channel 是空指针时，会直接挂起当前 Goroutine 并陷入永久休眠。**
+
+```go
+// 改写前
+select {
+case v, ok <-ch: // case ch <- v
+    ...    
+}
+
+// 改写后
+if ch == nil {
+    block()
+}
+v, ok := <-ch // case ch <- v
+...
+
+func block() {
+    gopark(nil, nil, waitReasonSelectNoCases, traceEvGoStop, 1)
+}
+```
+
+### 4.3 非阻塞操作
+
+当 select 中仅包含两个 `case`，并且其中一个是 `default` 时，Go 语言的编译器就会认为这是一次非阻塞的收发操作
+
+#### 发送
+
+首先是 Channel 的发送过程，当 `case` 中表达式的类型是 `OSEND` 时，编译器会使用条件语句和 `runtime.selectnbsend` 函数改写代码：
+
+```go
+select {
+case ch <- i:
+    ...
+default:
+    ...
+}
+
+if selectnbsend(ch, i) {
+    ...
+} else {
+    ...
+}
+
+func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
+    return chansend(c, elem, false, getcallerpc())
+}
+```
+
+这段代码中最重要的就是 `runtime.selectnbsend`，它为我们提供了向 Channel 非阻塞地发送数据的能力。向 Channel 发送数据的 `runtime.chansend` 函数包含一个 `block` 参数，该参数会决定这一次的发送是不是阻塞的;
+**由于我们向 `runtime.chansend` 函数传入了非阻塞，所以在不存在接收方或者缓冲区空间不足时，当前 Goroutine 都不会阻塞而是会直接返回。**
+
+#### 接收
+
+返回值数量不同会导致使用函数的不同，两个用于非阻塞接收消息的函数 `runtime.selectnbrecv` 和 `runtime.selectnbrecv2` 只是对 `runtime.chanrecv` 返回值的处理稍有不同。
+因为接收方不需要，所以 `runtime.selectnbrecv` 会直接忽略返回的布尔值，而 `runtime.selectnbrecv2` 会将布尔值回传给调用方。
+**与 `runtime.chansend` 一样，`runtime.chanrecv` 也提供了一个 block 参数用于控制这次接收是否阻塞。**
+
+```go
+func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
+    selected, _ = chanrecv(c, elem, false)
+    return
+}
+
+func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool) {
+    selected, *received = chanrecv(c, elem, false)
+    return
+}
+```
+
+### 4.4 常见流程
+
+在默认的情况下，编译器会使用如下的流程处理 select 语句：
+
+1. 将所有的 case 转换成包含 Channel 以及类型等信息的 `runtime.scase` 结构体；
+2. 调用运行时函数 `runtime.selectgo` 从多个准备就绪的 Channel 中选择一个可执行的 `runtime.scase` 结构体；
+3. 通过 `for` 循环生成一组 `if` 语句，在语句中判断自己是不是被选中的 case；
+
+#### 初始化
+
+`runtime.selectgo` 函数首先会进行执行必要的初始化操作并决定处理 `case` 的两个顺序 — **轮询顺序 `pollOrder` 和加锁顺序 `lockOrder`**：
+
+- **轮询顺序**：通过 `runtime.fastrandn` 函数引入随机性；
+- **加锁顺序**：按照 `Channel` 的地址排序后确定加锁顺序；
+
+**随机的轮询顺序可以避免 Channel 的饥饿问题，保证公平性；而根据 Channel 的地址顺序确定加锁顺序能够避免死锁的发生**。这段代码最后调用的 `runtime.sellock` 会按照之前生成的加锁顺序锁定 `select` 语句中包含所有的 Channel。
+
+#### 循环
+
+当我们为 select 语句锁定了所有 `Channel` 之后就会进入 `runtime.selectgo` 函数的主循环，它会分三个阶段查找或者等待某个 `Channel` 准备就绪：
+
+1. 查找是否已经存在准备就绪的 `Channel`，即可以执行收发操作；
+    **主要职责是查找所有 `case` 中是否有可以立刻被处理的 Channel**。无论是在等待的 Goroutine 上还是缓冲区中，只要存在数据满足条件就会立刻处理，如果不能立刻找到活跃的 Channel 就会进入循环的下一阶段，按照需要将当前 Goroutine 加入到 Channel 的 `sendq` 或者 `recvq` 队列中
+2. 将当前 Goroutine 加入 `Channel` 对应的收发队列上并等待其他 Goroutine 的唤醒；
+3. 当前 Goroutine 被唤醒之后找到满足条件的 `Channel` 并进行处理；
+
+`runtime.selectgo` 函数会根据不同情况通过 goto 语句跳转到函数内部的不同标签执行相应的逻辑，其中包括：
+
+1. `bufrecv`：可以从缓冲区读取数据；
+2. `bufsend`：可以向缓冲区写入数据；
+3. `recv`：可以从休眠的发送方获取数据；
+4. `send`：可以向休眠的接收方发送数据；
+5. `rclose`：可以从关闭的 Channel 读取 EOF；
+6. `sclose`：向关闭的 Channel 发送数据；
+7. `retc`：结束调用并返回；
+
+我们先来分析循环执行的第一个阶段，**查找已经准备就绪的 Channel**。循环会遍历所有的 `case` 并找到需要被唤起的 `runtime.sudog` 结构，在这个阶段，我们会根据 `case` 的四种类型分别处理：
+
+1. 当 `case` 不包含 `Channel` 时；
+   - 这种 `case` 会被跳过；
+2. 当 `case` 会从 `Channel` 中接收数据时；
+   - 如果当前 `Channel` 的 `sendq` 上有等待的 Goroutine，就会跳到 `recv` 标签并从缓冲区读取数据后将等待 Goroutine 中的数据放入到缓冲区中相同的位置；
+   - 如果当前 `Channel` 的缓冲区不为空，就会跳到 `bufrecv` 标签处从缓冲区获取数据；
+   - 如果当前 `Channel` 已经被关闭，就会跳到 `rclose` 做一些清除的收尾工作；
+3. 当 `case` 会向 `Channel` 发送数据时；
+   - 如果当前 `Channel` 已经被关，闭就会直接跳到 `sclose` 标签，触发 `panic` 尝试中止程序；
+   - 如果当前 `Channel` 的 `recvq` 上有等待的 Goroutine，就会跳到 `send` 标签向 Channel 发送数据；
+   - 如果当前 `Channel` 的缓冲区存在空闲位置，就会将待发送的数据存入缓冲区；
+4. 当 `select` 语句中包含 `default` 时；
+   - 表示前面的所有 `case` 都没有被执行，这里会解锁所有 `Channel` 并返回，意味着当前 `select` 结构中的收发都是非阻塞的；
+
+**除了将当前 Goroutine 对应的 `runtime.sudog` 结构体加入队列之外，这些结构体都会被串成链表附着在 Goroutine 上。在入队之后会调用 `runtime.gopark` 挂起当前 Goroutine 等待调度器的唤醒。**
+
+
+
 ### 1.6 map
 
+#### map 遍历
+
+```go
+// 生成随机数 r
+r := uintptr(fastrand())
+if h.B > 31-bucketCntBits {
+    r += uintptr(fastrand()) << 31
+}
+
+// 从哪个 bucket 开始遍历
+it.startBucket = r & (uintptr(1)<<h.B - 1)
+// 从 bucket 的哪个 cell 开始遍历
+it.offset = uint8(r >> h.B & (bucketCnt - 1))
+```
+
+例如，B = 2，那 uintptr(1)<<h.B - 1 结果就是 3，低 8 位为 0000 0011，将 r 与之相与，就可以得到一个 0~3 的 bucket 序号；bucketCnt - 1 等于 7，低 8 位为 0000 0111，将 r 右移 2 位后，与 7 相与，就可以得到一个 0~7 号的 cell。
+
+首先根据 B 进行位运算得到起始 Buckets，然后与 7 进行位运算得到起始槽位 cell，然后开始进行遍历，最后再遍历当前桶槽位之前的 cell，如果是在扩容阶段则需要进行老 Buckets 是否迁移完成的判断，如果迁移完成直接进行遍历，没有进行判断是否是加倍扩容，加倍扩容则需要拿出到当前新桶的元素进行迁移，然后继续进行，知道返回起始桶的 cell 前位置。
+
+#### map 插入或更新
+
+对 key 计算 hash 值，根据 hash 值按照之前的流程，找到要赋值的位置（可能是插入新 key，也可能是更新老 key），对相应位置进行赋值。
+
+**核心还是一个双层循环，外层遍历 `bucket` 和它的 `overflow bucket`，内层遍历整个 `bucket` 的各个 cell**。
+
+**插入的大致过程**：
+
+1. **首先会检查 map 的标志位 `flags`**。**如果 `flags` 的写标志位此时被置 1 了，说明有其他协程在执行“写”操作，进而导致程序 panic**。这也说明了 map 对协程是不安全的。
+
+2. **定位 map key**
+
+   - 如果 map 处在扩容的过程中，那么当 key 定位到了某个 bucket 后，需要确保这个 bucket 对应的老 bucket 完成了迁移过程。**即老 bucket 里的 key 都要迁移到新的 bucket 中来（分裂到 2 个新 bucket），才能在新的 bucket 中进行插入或者更新的操作**。
+
+   - 准备两个指针，一个（`inserti`）指向 `key` 的 hash 值在 `tophash` 数组所处的位置，另一个(insertk)指向 `cell` 的位置（也就是 `key` 最终放置的地址），当然，对应 `value` 的位置就很容易定位出来了。这三者实际上都是关联的，在 `tophash` 数组中的索引位置决定了 `key` 在整个 bucket 中的位置（共 8 个 key），而 `value` 的位置需要“跨过” 8 个 key 的长度。
+
+   - 在循环的过程中，`inserti` 和 `insertk` 分别指向第一个找到的空闲的 `cell`。如果之后在 `map` 没有找到 `key` 的存在，也就是说原来 `map` 中没有此 `key`，这意味着插入新 `key`。那最终 `key` 的安置地址就是第一次发现的“空位”（tophash 是 empty）。
+
+   - 如果这个 `bucket` 的 8 个 `key` 都已经放置满了，那在跳出循环后，发现 `inserti` 和 `insertk` 都是空，这时候需要在 `bucket` 后面挂上 `overflow bucket`。当然，也有可能是在 `overflow bucket` 后面再挂上一个 `overflow bucket`。这就说明，太多 `key` hash 到了此 `bucket`。
+
+3. **最后，会更新 map 相关的值**，如果是插入新 key，map 的元素数量字段 `count` 值会加 1；在函数之初设置的 `hashWriting` 写标志出会清零。
+
+#### map 删除
+
+1. 它首先会检查 `h.flags` 标志，如果发现写标位是 1，直接 `panic`，因为这表明有其他协程同时在进行写操作。
+
+2. 计算 `key` 的哈希，找到落入的 bucket。检查此 `map` 如果正在扩容的过程中，直接触发一次搬迁操作。
+删除操作同样是两层循环，核心还是找到 key 的具体位置。寻找过程都是类似的，在 bucket 中挨个 cell 寻找。
+
+3. 找到对应位置后，对 `key` 或者 `value` 进行“清零”操作：
+
+4. 最后，将 `count` 值减 1，将对应位置的 `tophash` 值置成 `Empty`。
+
+#### map 总结
+
+- **无法对 map 的key 和 value 取地址**
+- **在查找、赋值、遍历、删除的过程中都会检测写标志**，一旦发现写标志置位（等于1），则直接 panic。赋值和删除函数在检测完写标志是复位之后，先将写标志位置位，才会进行之后的操作。
 - **`map` 的 `value` 本身是不可寻址的**
 
     因为 `map` 中的值会在内存中移动，并且旧的指针地址在 `map` 改变时会变得⽆效。故如果需要修改 `map` 值，可以将 `map` 中的⾮指针类型 `value` ，修改为指针类型，⽐如使⽤ `map[string]*Student` .
@@ -296,14 +370,341 @@ func WithValue(parent Context, key, val interface{}) Context
 
     因此，在 `Get` 中也需要加锁，因为这⾥只是读，建议使⽤读写 `sync.RWMutex` 。
 
+- **sync.map 没有 len 方法**
+
 ### 1.7 接口
+
+### 自动检测类型是否实现接口
+
+```go
+var _ io.Writer = (*myWriter)(nil)
+var _ io.Writer = myWriter{}
+```
+
+上述赋值语句会发生隐式地类型转换，在转换的过程中，编译器会检测等号右边的类型是否实现了等号左边接口所规定的函数。
+
+## 2. 同步原语&互斥锁
+
+### 2.1 mutex
+
+- Mutex 是互斥锁同一线程内不能重复加锁
+
+- `sync/rwmutex.go` 中注释可以知道，读写锁当有⼀个协程在等待写锁时，其他协程是不能获得读锁的
+
+- 加锁后复制变量，会将锁的状态也复制，所以 mu1 其实是已经加锁状态，再加锁会死锁。
+
+```go
+type MyMutex struct {
+    count int
+    sync.Mutex
+}
+func main() {
+    var mu MyMutex
+    mu.Lock()
+    var mu2 = mu
+    mu.count++
+    mu.Unlock()
+    mu2.Lock()
+    mu2.count++
+    mu2.Unlock()
+    fmt.Println(mu.count, mu2.count)
+}
+```
+
+### 2.2 mutex 加锁与解锁
+
+#### 加锁
+
+```go
+func (m *Mutex) Lock() {
+    if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
+        return
+    }
+    m.lockSlow()
+}
+
+func (m *Mutex) lockSlow() {
+    var waitStartTime int64
+    starving := false
+    awoke := false
+    iter := 0
+    old := m.state
+    for {
+        if old&(mutexLocked|mutexStarving) == mutexLocked && runtime_canSpin(iter) {
+            if !awoke && old&mutexWoken == 0 && old>>mutexWaiterShift != 0 &&
+                atomic.CompareAndSwapInt32(&m.state, old, old|mutexWoken) {
+                awoke = true
+            }
+            runtime_doSpin()
+            iter++
+            old = m.state
+            continue
+        }
+```
+
+如果互斥锁的状态不是 0 时就会调用 `sync.Mutex.lockSlow` 尝试通过自旋（Spinnig）等方式等待锁的释放，该方法的主体是一个非常大 `for` 循环，这里将它分成几个部分介绍获取锁的过程：
+
+1. 判断当前 Goroutine 能否进入自旋；
+2. 通过自旋等待互斥锁的释放；
+3. 计算互斥锁的最新状态；
+4. 更新互斥锁的状态并获取锁；
+
+**进入自旋的条件**：
+
+1. 互斥锁只有在普通模式才能进入自旋；
+2. `runtime.sync_runtime_canSpin` 需要返回 true：
+   1. 运行在多 CPU 的机器上；
+   2. 当前 Goroutine 为了获取该锁进入自旋的次数小于四次；
+   3. 当前机器上至少存在一个正在运行的处理器 P 并且处理的运行队列为空；
+
+如果没有通过 `CAS` 获得锁，会调用 `runtime.sync_runtime_SemacquireMutex` 通过信号量保证资源不会被两个 Goroutine 获取。`runtime.sync_runtime_SemacquireMutex` 会在方法中不断尝试获取锁并陷入休眠等待信号量的释放，一旦当前 Goroutine 可以获取信号量，它就会立刻返回，`sync.Mutex.Lock` 的剩余代码也会继续执行。
+
+- 在正常模式下，这段代码会设置唤醒和饥饿标记、重置迭代次数并重新执行获取锁的循环；
+- 在饥饿模式下，当前 Goroutine 会获得互斥锁，如果等待队列中只存在当前 Goroutine，互斥锁还会从饥饿模式中退出；
+
+#### 解锁
+
+互斥锁的解锁过程 `sync.Mutex.Unlock` 与加锁过程相比就很简单，该过程会先使用 `sync/atomic.AddInt32` 函数快速解锁，这时会发生下面的两种情况：
+
+- 果该函数返回的新状态等于 0，当前 Goroutine 就成功解锁了互斥锁；
+- 如果该函数返回的新状态不等于 0，这段代码会调用 `sync.Mutex.unlockSlow` 开始慢速解锁：
+
+`sync.Mutex.unlockSlow` 解锁
+
+- 在正常模式下，`sync.Mutex.unlockSlow` 会使用如下所示的处理过程：
+  - 如果互斥锁不存在等待者或者互斥锁的 mutexLocked、mutexStarving、mutexWoken 状态不都为 0，那么当前方法可以直接返回，不需要唤醒其他等待者；
+  - 如果互斥锁存在等待者，会通过 `sync.runtime_Semrelease` 唤醒等待者并移交锁的所有权；
+- 在饥饿模式下，上述代码会直接调用 `sync.runtime_Semrelease` 将当前锁交给下一个正在尝试获取锁的等待者，等待者被唤醒后会得到锁，在这时互斥锁还不会退出饥饿状态；
+
+**互斥锁的加锁过程比较复杂，它涉及自旋、信号量以及调度等概念：**
+
+- 如果互斥锁处于初始化状态，会通过置位 `mutexLocked` 加锁；
+- 如果互斥锁处于 `mutexLocked` 状态并且在普通模式下工作，会进入自旋，执行 30 次 `PAUSE` 指令消耗 CPU 时间等待锁的释放；
+- 如果当前 Goroutine 等待锁的时间超过了 1ms，互斥锁就会切换到饥饿模式；
+- 互斥锁在正常情况下会通过 r`untime.sync_runtime_SemacquireMutex` 将尝试获取锁的 Goroutine 切换至休眠状态，等待锁的持有者唤醒；
+- 如果当前 Goroutine 是互斥锁上的最后一个等待的协程或者等待的时间小于 1ms，那么它会将互斥锁切换回正常模式；
+
+互斥锁的解锁过程与之相比就比较简单，其代码行数不多、逻辑清晰，也比较容易理解：
+
+- 当互斥锁已经被解锁时，调用 `sync.Mutex.Unlock` 会直接抛出异常；
+- 当互斥锁处于饥饿模式时，将锁的所有权交给队列中的下一个等待者，等待者会负责设置 `mutexLocked` 标志位；
+- 当互斥锁处于普通模式时，如果没有 Goroutine 等待锁的释放或者已经有被唤醒的 Goroutine 获得了锁，会直接返回；在其他情况下会通过 `sync.runtime_Semrelease` 唤醒对应的 Goroutine；
+
+### 2.3 读写锁实现原理
+
+**读写锁区别与互斥锁的主要区别就是读锁之间是共享的，多个 goroutine 可以同时加读锁，但是写锁与写锁、写锁与读锁之间则是互斥的**。
+
+因为读锁是共享的，所以如果当前已经有读锁，那后续goroutine继续加读锁正常情况下是可以加锁成功，但是如果一直有读锁进行加锁，那尝试加写锁的goroutine则可能会长期获取不到锁，这就是因为读锁而导致的写锁饥饿问题
+
+```go
+type RWMutex struct {
+    w           Mutex  // held if there are pending writers
+    writerSem   uint32 // 用于writer等待读完成排队的信号量
+    readerSem   uint32 // 用于reader等待写完成排队的信号量
+    readerCount int32  // 读锁的计数器
+    readerWait  int32  // 等待读锁释放的数量
+}
+```
+
+1. **加读锁**
+
+    ```go
+    func (rw *RWMutex) RLock() {
+        if race.Enabled {
+            _ = rw.w.state
+            race.Disable()
+        }
+        // 累加reader计数器，如果小于0则表明有writer正在等待
+        if atomic.AddInt32(&rw.readerCount, 1) < 0 {
+            // 当前有writer正在等待读锁，读锁就加入排队
+            runtime_SemacquireMutex(&rw.readerSem, false)
+        }
+        if race.Enabled {
+            race.Enable()
+            race.Acquire(unsafe.Pointer(&rw.readerSem))
+        }
+    }
+    ```
+
+2. **释放读锁**
+
+    ```go
+    func (rw *RWMutex) RUnlock() {
+        if race.Enabled {
+            _ = rw.w.state
+            race.ReleaseMerge(unsafe.Pointer(&rw.writerSem))
+            race.Disable()
+        }
+        // redercount 如果小于0，则表明当前有 writer 正在等待
+        // 不小于 0 直接释放锁
+        if r := atomic.AddInt32(&rw.readerCount, -1); r < 0 {
+            if r+1 == 0 || r+1 == -rwmutexMaxReaders {
+                race.Enable()
+                throw("sync: RUnlock of unlocked RWMutex")
+            }
+            // 将等待reader的计数减1，证明当前是已经有一个读的，
+            // 如果值==0，则进行唤醒等待的，不等于零直接释放读锁
+            if atomic.AddInt32(&rw.readerWait, -1) == 0 {
+                // The last reader unblocks the writer.
+                runtime_Semrelease(&rw.writerSem, false)
+            }
+        }
+        if race.Enabled {
+            race.Enable()
+        }
+    }
+    ```
+
+3. **加写锁**
+
+    ```go
+    func (rw *RWMutex) Lock() {
+        if race.Enabled {
+            _ = rw.w.state
+            race.Disable()
+        }
+        // 首先获取mutex锁，同时多个goroutine只有一个可以进入到下面的逻辑
+        rw.w.Lock()
+        // 对readerCounter进行进行抢占，通过递减rwmutexMaxReaders允许最大读的数量
+        // 来实现写锁对读锁的抢占
+        r := atomic.AddInt32(&rw.readerCount, -rwmutexMaxReaders) + rwmutexMaxReaders
+        // 记录需要等待多少个reader完成,如果发现不为0，则表明当前有reader正在读取，当前goroutine
+        // 需要进行排队等待
+        if r != 0 && atomic.AddInt32(&rw.readerWait, r) != 0 {
+            runtime_SemacquireMutex(&rw.writerSem, false)
+        }
+        if race.Enabled {
+            race.Enable()
+            race.Acquire(unsafe.Pointer(&rw.readerSem))
+            race.Acquire(unsafe.Pointer(&rw.writerSem))
+        }
+    }
+    ```
+
+    - 调用结构体持有的 `sync.Mutex` 结构体的 `sync.Mutex.Lock` 阻塞后续的写操作；
+    - 因为互斥锁已经被获取，其他 Goroutine 在获取写锁时会进入自旋或者休眠；
+    - 调用 `sync/atomic.AddInt32` 函数阻塞后续的读操作：
+    - 如果仍然有其他 Goroutine 持有互斥锁的读锁，**该 Goroutine 会调用 `runtime.sync_runtime_SemacquireMutex` 进入休眠状态等待所有读锁所有者执行结束后释放 `writerSem` 信号量将当前协程唤醒；**
+
+4. **释放写锁**
+
+    ```go
+    func (rw *RWMutex) Unlock() {
+        if race.Enabled {
+            _ = rw.w.state
+            race.Release(unsafe.Pointer(&rw.readerSem))
+            race.Disable()
+        }
+
+        // 将reader计数器复位，上面减去了一个rwmutexMaxReaders现在再重新加回去即可复位
+        r := atomic.AddInt32(&rw.readerCount, rwmutexMaxReaders)
+        if r >= rwmutexMaxReaders {
+            race.Enable()
+            throw("sync: Unlock of unlocked RWMutex")
+        }
+        // 唤醒所有的读锁
+        for i := 0; i < int(r); i++ {
+            runtime_Semrelease(&rw.readerSem, false)
+        }
+        // 释放mutex
+        rw.w.Unlock()
+        if race.Enabled {
+            race.Enable()
+        }
+    }
+    ```
+
+**RWMutex 小结**。
+
+- 调用 `sync.RWMutex.Lock` 尝试获取写锁时；
+  - 每次 `sync.RWMutex.RUnlock` 都会将 `readerCount` 其减一，当它归零时该 Goroutine 会获得写锁；
+  - 将 `readerCount` 减少 `rwmutexMaxReaders` 个数以阻塞后续的读操作；
+- 调用 `sync.RWMutex.Unlock` 释放写锁时，会先通知所有的读操作，然后才会释放持有的互斥锁；
+
+### 2.4. waitgroup
+
+- `WaitGroup` 在调⽤ `Wait` 之后是不能再调⽤ `Add` ⽅法的。
+
+通过对 `sync.WaitGroup` 的分析和研究，我们能够得出以下结论：
+
+- `sync.WaitGroup` 必须在 `sync.WaitGroup.Wait` 方法返回之后才能被重新使用；
+- `sync.WaitGroup.Done` 只是对 `sync.WaitGroup.Add` 方法的简单封装，我们可以向 `sync.WaitGroup.Add` 方法传入任意负数（需要保证计数器非负）快速将计数器归零以唤醒等待的 Goroutine；
+- **可以同时有多个 Goroutine 等待当前 `sync.WaitGroup` 计数器的归零，这些 Goroutine 会被同时唤醒；**
+
+### 2.5 once
+
+```go
+type Once struct {
+    done uint32
+    m    Mutex
+}
+```
+
+作为用于保证函数执行次数的 `sync.Once` 结构体，它使用互斥锁和 sync/atomic 包提供的方法实现了某个函数在程序运行期间只能执行一次的语义。在使用该结构体时，我们也需要注意以下的问题：
+
+- `sync.Once.Do` 方法中传入的函数只会被执行一次，哪怕函数中发生了 `panic`；
+- 两次调用 `sync.Once.Do` 方法传入不同的函数只会执行第一次调传入的函数；
+
+
+### 2.6 cond
+
+`sync.Cond` 不是一个常用的同步机制，但是在条件长时间无法满足时，与使用 `for {}` 进行忙碌等待相比，`sync.Cond` 能够让出处理器的使用权，提高 CPU 的利用率。使用时我们也需要注意以下问题：
+
+- `sync.Cond.Wait` 在调用之前一定要使用获取互斥锁，否则会触发程序崩溃；
+- `sync.Cond.Signal` 唤醒的 Goroutine 都是队列最前面、等待最久的 Goroutine；
+- `sync.Cond.Broadcast` 会按照一定顺序广播通知等待的全部 Goroutine；
+
+## 3. unsafe
+
+unsafe 包提供了 2 点重要的能力：
+
+1. 任何类型的指针和 `unsafe.Pointer` 可以相互转换。
+2. `uintptr` 类型和 `unsafe.Pointer` 可以相互转换。
+
+**`uintptr` 并没有指针的语义，意思就是 `uintptr` 所指向的对象会被 gc 无情地回收。而 `unsafe.Pointer` 有指针语义，可以保护它所指向的对象在“有用”的时候不会被垃圾回收。**
+
+### 3.1 unsfae 获取 slice &map
+
+1. 可以通过 unsafe.Pointer 和 uintptr 进行转换，得到 slice 的字段值。
+
+    ```go
+    func main() {
+        s := make([]int, 9, 20)
+        var Len = *(*int)(unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + uintptr(8)))
+        fmt.Println(Len, len(s)) // 9 9
+
+        var Cap = *(*int)(unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + uintptr(16)))
+        fmt.Println(Cap, cap(s)) // 20 20
+    }
+
+    // Len: &s => pointer => uintptr => pointer => *int => int
+    // Cap: &s => pointer => uintptr => pointer => *int => int
+    ```
+
+2. 能通过 unsafe.Pointer 和 uintptr 进行转换，得到 hamp 字段的值，只不过，现在 count 变成二级指针了：
+ 
+    ```go
+    func main() {
+        mp := make(map[string]int)
+        mp["qcrao"] = 100
+        mp["stefno"] = 18
+
+        count := **(**int)(unsafe.Pointer(&mp))
+        fmt.Println(count, len(mp)) // 2 2
+    }
+
+    // &mp => pointer => **int => int
+    ```
+
+
 
 ## 2. channel
 
 ### 介绍 channel
 
 Go 语言中，**不要通过共享内存来通信，而要通过通信来实现内存共享**。Go 的 `CSP`(Communicating Sequential Process)并发模型，中文叫做**通信顺序进程**，是通过 goroutine 和 channel 来实现的。
-**channel 收发遵循先进先出 FIFO，分为有缓存和无缓存**，channel 中大致有 `buffer`(当缓冲区大小部位 0 时，是个 `ring buffer`)、`sendx` 和 `recvx` 收发的位置(`ring buffer` 记录实现)、`sendq`、`recvq` 当前 channel 因为缓冲区不足而阻塞的队列、使用双向链表存储、还有一个 mutex 锁控制并发、其他原属等。
+
+**channel 收发遵循先进先出 FIFO，分为有缓存和无缓存**，channel 中大致有 `buffer`(当缓冲区大小部位 0 时，是个 `ring buffer`)、`sendx` 和 `recvx` 收发的位置(`ring buffer` 记录实现)、`sendq`、`recvq` 当前 channel 因为缓冲区不足而阻塞的队列、使用双向链表存储、还有一个 `mutex` 锁控制并发、其他原属等。
 
 ### 2.1 向通道发送数据
 
@@ -327,7 +728,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 
 #### 2.1.1 发送数据
 
-- 如果当前 Channel 的 `recvq` 上存在已经被阻塞的 Goroutine，那么会直接将数据发送给当前 Goroutine 并将其设置成下一个运行的 Goroutine,**也就是将接收方的 Goroutine 放到了处理器的 `runnext` 中，程序没有立刻执行该 Goroutine**
+- 如果当前 Channel 的 `recvq` 上存在已经被阻塞的 Goroutine，那么会直接将数据发送给当前 Goroutine 并将其设置成下一个运行的 Goroutine，**也就是将接收方的 Goroutine 放到了处理器的 `runnext` 中，程序没有立刻执行该 Goroutine**
     > 向一个非缓冲型的 channel 发送数据、从一个无元素的（非缓冲型或缓冲型但空）的 channel 接收数据，都会导致一个 goroutine 直接操作另一个 goroutine 的栈, 由于 GC 假设对栈的写操作只能发生在 goroutine 正在运行中并且由当前 goroutine 来写, 所以这里实际上违反了这个假设。可能会造成一些问题，**所以需要用到写屏障来规避**
 - 如果 Channel 存在缓冲区并且其中还有空闲的容量，我们会直接将数据存储到缓冲区 `sendx` 所在的位置上；
 - 如果不满足上面的两种情况，会创建一个 `runtime.sudog` 结构并将其加入 Channel 的 `sendq` 队列中，当前 Goroutine 也会陷入阻塞等待其他的协程从 Channel 接收数据；
@@ -402,6 +803,8 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
    3. 重复关闭一个 channel。
 
 - 向 `nil` 的通道发送或接收数据会调用 `gopark` 挂起，并陷入永久阻塞
+- channel 泄漏
+    **泄漏的原因是 goroutine 操作 channel 后，处于发送或接收阻塞状态，而 channel 处于满或空的状态，一直得不到改变**。同时，垃圾回收器也不会回收此类资源，进而导致 gouroutine 会一直处于等待队列中，不见天日。
 
 ## 3. defer
 
@@ -421,6 +824,10 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 - **在⼀个切⽚上存储指针或带指针的值**。⼀个典型的例⼦就是 `[]*string`。这会导致切⽚的内容逃逸。尽管其后⾯的数组可能是在栈上分配的，但其引⽤的值⼀定是在堆上。
 - **`slice` 的背后数组被重新分配了，因为 `append` 时可能会超出其容量(`cap`)**。`slice` 初始化的地⽅在编译时是可以知道的，它最开始会在栈上分配。如果切⽚背后的存储要基于运⾏时的数据进⾏扩充，就会在堆上分配。
 - **在 `interface` 类型上调⽤⽅法**。在 `interface` 类型上调⽤⽅法都是动态调度的⽅法的真正实现只能在运⾏时知道。想像⼀个 `io.Reader` 类型的变量 `r` , 调⽤ `r.Read(b)` 会使得 `r` 的值和切⽚ `b` 的背后存储都逃逸掉，所以会在堆上分配。
+
+- **闭包的捕获变量也会分配到堆上，还有就是大对象 大于 32KB**
+
+### new 一个对象最后在堆上还是栈上就根据上面的逃逸分析进行回答
 
 ## 5. GC 垃圾回收
 
@@ -456,7 +863,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
     Thread 创建和销毀都会有巨大的消耗，因为要和操作系统打交道，是内核级的，通常解决的办法就是线程池。而 goroutine 因为是由 `Go runtime` 负责管理的，创建和销毁的消耗非常小，是用户态的。
 
 - **切换**
-    当 threads 切换时，需要保存各种寄存器，以便将来恢复：
+    当 threads 切换时，需要保存各种寄存器，以便将来恢复
 
     而 goroutines 切换只需保存三个寄存器：Program Counter, Stack Pointer and BP。
 
@@ -540,7 +947,7 @@ Runtime 会在程序启动的时候，创建 `M` 个线程（CPU 执行调度的
 
 1. 当 `next` 为 `true` 时，将 Goroutine 设置到处理器的 `runnext` 作为下一个处理器执行的任务；
 2. 当 `next` 为 `false` 并且本地运行队列还有剩余空间时，将 Goroutine 加入处理器持有的本地运行队列；
-3. 当处理器的本地运行队列已经没有剩余空间时就会把本地队列中的一部分 Goroutine 和待加入的 Goroutine 通过 `runtime.runqputslow` 添加到调度器持有的全局运行队列上；
+3. **当处理器的本地运行队列已经没有剩余空间时就会把本地队列中的一半分 Goroutine 和待加入的 Goroutine 通过 `runtime.runqputslow` 添加到调度器持有的全局运行队列上**；
 
 **处理器本地的运行队列是一个使用数组构成的环形链表，它最多可以存储 256 个待执行任务。**
 

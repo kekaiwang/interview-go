@@ -3,3 +3,6 @@ run:
 
 go:
 	go run golang.go
+
+g:
+	go run gc.go
