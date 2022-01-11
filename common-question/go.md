@@ -72,6 +72,31 @@
 
 - **内置渲染**，Gin 为 JSON，XML 和 HTML 渲染提供了易于使用的 API。
 
+### 1.5 gRPC VS Restful
+
+- **文档规范**，gRPC使用proto文件编写接口（API），文档规范比Restful更好，因为proto文件的语法和形式是定死的，所以更为严谨、风格统一清晰；而Restful由于可以使用多种工具进行编写（只要人看得懂就行），每家公司、每个人的攥写风格又各有差异，难免让人觉得比较混乱。
+
+- **消息编码**，消息编码这块，gRPC使用protobuf进行消息编码，而Restful一般使用JSON进行编码
+
+- **传输协议**，gRPC使用HTTP/2作为底层传输协议，而RestFul则使用 HTTP 或则其他协议 https/tcp等。
+
+- **传输性能**，由于 gRPC 使用 protobuf 进行消息编码（即序列化），而经 protobuf 序列化后的消息体积很小（传输内容少，传输相对就快）；再加上HTTP/2协议的加持（HTTP1.1的进一步优化），使得gRPC的传输性能要优于Restful。
+
+- **传输形式**，gRPC最大的优势就是支持流式传输，传输形式具体可以分为四种（unary、client stream、server stream、bidirectional stream），这个后面我们会讲到；而Restful是不支持流式传输的。
+
+- 浏览器的支持度
+不知道是不是gRPC发展较晚的原因，目前浏览器对gRPC的支持度并不是很好，而对Restful的支持可谓是密不可分，这也是gRPC的一个劣势，如果后续浏览器对gRPC的支持度越来越高，不知道gRPC有没有干饭Restful的可能呢？
+
+- **消息的可读性和安全性**，由于gRPC序列化的数据是二进制，且如果你不知道定义的Request和Response是什么，你几乎是没办法解密的，所以gRPC的安全性也非常高，但随着带来的就是可读性的降低，调试会比较麻烦；而Restful则相反（现在有HTTPS，安全性其实也很高）
+
+- **代码的编写**，由于gRPC调用的函数，以及字段名，都是使用stub文件的，所以从某种角度看，代码更不容易出错，联调成本也会比较低，不会出现低级错误，比如字段名写错、写漏。
+
+总的来说：
+
+1. **gRPC主要用于公司内部的服务调用，性能消耗低，传输效率高，服务治理方便。**
+2. **Restful主要用于对外，比如提供接口给前端调用，提供外部服务给其他人调用等，**
+
+
 ### 1.5 context
 
 #### 1.5.1 context 引入
@@ -696,7 +721,72 @@ unsafe 包提供了 2 点重要的能力：
     // &mp => pointer => **int => int
     ```
 
+### 3.2 修改私有成员
 
+对于一个结构体，通过 `offset` 函数可以获取结构体成员的偏移量，进而获取成员的地址，读写该地址的内存，就可以达到改变成员值的目的。
+
+这里有一个内存分配相关的事实：结构体会被分配一块连续的内存，结构体的地址也代表了第一个成员的地址。
+
+```go
+type Programmer struct {
+    name string
+    language string
+}
+
+func main() {
+    p := Programmer{"stefno", "go"}
+    fmt.Println(p)
+    
+    name := (*string)(unsafe.Pointer(&p))
+    *name = "qcrao"
+
+    lang := (*string)(unsafe.Pointer(uintptr(unsafe.Pointer(&p)) + unsafe.Offsetof(p.language)))
+    *lang = "Golang"
+
+    fmt.Println(p) // {qcrao Golang}
+}
+```
+
+`name` 是结构体的第一个成员，因此可以直接将 `&p` 解析成 `*string`。这一点，在前面获取 `map` 的 `count` 成员时，用的是同样的原理。
+
+**对于结构体的私有成员，现在有办法可以通过 `unsafe.Pointer` 改变它的值了。**
+
+多加一个 age 字段，并且放在其他包，这样在 main 函数中，它的三个字段都是私有成员变量，不能直接修改。**通过 `unsafe.Sizeof()` 函数可以获取成员大小，进而计算出成员的地址，直接修改内存**。
+
+```go
+type Programmer struct {
+    name string
+    age int
+    language string
+}
+
+func main() {
+    p := Programmer{"stefno", 18, "go"}
+    fmt.Println(p)
+
+    lang := (*string)(unsafe.Pointer(uintptr(unsafe.Pointer(&p)) + unsafe.Sizeof(int(0)) + unsafe.Sizeof(string(""))))
+    *lang = "Golang"
+
+    fmt.Println(p) // {stefno 18 Golang}
+}
+```
+
+### 3.3 字符串和 byte 转换
+
+实现字符串和 `bytes` 切片之间的转换，要求是 `zero-copy`。
+
+上面是反射包下的结构体，路径：src/reflect/value.go。只需要共享底层 Data 和 Len 就可以实现 zero-copy。
+
+```go
+func string2bytes(s string) []byte {
+    return *(*[]byte)(unsafe.Pointer(&s))
+}
+func bytes2string(b []byte) string{
+    return *(*string)(unsafe.Pointer(&b))
+}
+```
+
+原理上是利用指针的强转，代码比较简单，不作详细解释。
 
 ## 2. channel
 
@@ -873,7 +963,15 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
     因此，goroutines 切换成本比 threads 要小得多。
 
+### M:N 模型
+
+Runtime 会在程序启动的时候，创建 `M` 个线程（CPU 执行调度的单位），之后创建的 `N` 个 goroutine 都会依附在这 `M` 个线程上执行。
+
+在同一时刻，一个线程上只能跑一个 goroutine。当 goroutine 发生阻塞（例如上篇文章提到的向一个 channel 发送数据，被阻塞）时，runtime 会把当前 goroutine 调度走，让其他 goroutine 来执行。
+
 ### 3.2 schedule 调度
+
+
 
 *`Runtime` 运行时维护所有的 `goroutines`，并通过 `scheduler` 来进行调度。`Goroutines` 和 `threads` 是独立的，但是 `goroutines` 要依赖 `threads` 才能执行。*
 
@@ -897,10 +995,6 @@ Go 程序启动后，会给每个逻辑核心分配一个 `P`（Logical Processo
 - **可运行**：Goroutine 已经准备就绪，可以在线程运行，如果当前程序中有非常多的 Goroutine，每个 Goroutine 就可能会等待更多的时间，即 `_Grunnable；`
 - **运行中**：Goroutine 正在某个线程上运行，即 `_Grunning`；
 
-#### M:N 模型
-
-Runtime 会在程序启动的时候，创建 `M` 个线程（CPU 执行调度的单位），之后创建的 `N` 个 goroutine 都会依附在这 `M` 个线程上执行。
-
 ### 调度器启动
 
 **系统加载可执行文件大概都会经过这几个阶段：**
@@ -911,20 +1005,38 @@ Runtime 会在程序启动的时候，创建 `M` 个线程（CPU 执行调度的
 4. 把由用户在命令行输入的参数拷贝到主线程的栈
 5. 把主线程放入操作系统的运行队列等待被调度
 
-通过 `runtime.schedinit` 初始化调度器，在调度器初始函数执行的过程中会将 `maxmcount` 设置成 10000，这也就是一个 Go 语言程序能够创建的最大线程数，虽然最多可以创建 10000 个线程，但是可以同时运行的线程还是由 `GOMAXPROCS` 变量控制。
+大致过程：
 
-**最后调用 `runtime.procresize` 的执行过程如下**
+1. **运行时类型检查**，主要是校验编译器的翻译工作是否正确，是否有 “坑”。
+2. **系统参数传递**，主要是将系统参数转换传递给程序使用。
+3. `runtime.osinit`：**系统基本参数设置**，主要是获取 CPU 核心数和内存物理页大小。
+4. **`runtime.schedinit`：进行各种运行时组件的初始化**，包含调度器、内存分配器、堆、栈、GC 等一大堆初始化工作。会进行 p 的初始化，并将 m0 和某一个 p 进行绑定。
+   - 先通过汇编初始化 g0
+   - 然后主线程 tls 绑定 m0
+   - 初始化 m0 并挂到 allm 中
+   - 接下来是 procresize 函数运行
+ 
+    通过 `runtime.schedinit` 初始化调度器，在调度器初始函数执行的过程中会将 `maxmcount` 设置成 10000，这也就是一个 Go 语言程序能够创建的最大线程数，虽然最多可以创建 10000 个线程，但是可以同时运行的线程还是由 `GOMAXPROCS` 变量控制。
 
-1. 如果全局变量 `allp` 切片中的处理器数量少于期望数量，会对切片进行扩容；
-2. 使用 `new` 创建新的处理器结构体并调用 `runtime.p.init` 初始化刚刚扩容的处理器；
-3. 通过指针将线程 `m0` 和处理器 `allp[0]` 绑定到一起；
-4. 调用 `runtime.p.destroy` 释放不再使用的处理器结构；
-5. 通过截断改变全局变量 `allp` 的长度保证与期望处理器数量相等；
-6. 将除 `allp[0]` 之外的处理器 `P` 全部设置成 `_Pidle` 并加入到全局的空闲队列中；
+    **调用 `runtime.procresize` 的执行过程如下**
+
+    1. 如果全局变量 `allp` 切片中的处理器数量少于期望数量，会对切片进行扩容；
+    2. 使用 `new` 创建新的处理器结构体并调用 `runtime.p.init` 初始化刚刚扩容的处理器；
+    3. 通过指针将线程 `m0` 和处理器 `allp[0]` 绑定到一起；**也就是绑定 `m0` 和 `p0`**
+    4. 调用 `runtime.p.destroy` 释放不再使用的处理器结构；
+    5. 通过截断改变全局变量 `allp` 的长度保证与期望处理器数量相等；
+    6. 将除 `allp[0]` 之外的处理器 `P` 全部设置成 `_Pidle` 并加入到全局的空闲队列中；
+5. `runtime.main`：主要工作是运行 main goroutine，虽然在 `runtime·rt0_go` 中指向的是$runtime·mainPC，但实质指向的是 runtime.main。
+6. runtime.newproc：创建一个新的 goroutine，且绑定 runtime.main 方法（也就是应用程序中的入口 main 方法）。并将其放入 m0 绑定的p的本地队列中去，以便后续调度。
+7. runtime.mstart：启动 m，调度器开始进行循环调度。
+
+**注意要点：**
+
+- 因为 m0 是全局变量，而 m0 又要绑定到工作线程才能执行。runtime 会启动多个工作线程，每个线程都会绑定一个 `m0`。而且，代码里还得保持一致，都是用 m0 来表示。这就要用到线程本地存储的知识了，也就是常说的 TLS（Thread Local Storage）。简单来说，TLS 就是线程本地的私有的全局变量。
 
 ### 3.x 创建 goroutine
 
-使用 Go 语言的 `go` 关键字，编译器会通过 `cmd/compile/internal/gc.state.stmt` 和 `cmd/compile/internal/gc.state.call` 两个方法将该关键字转换成 `runtime.newproc` 函数调用, 入参是参数大小和表示函数的指针 `funcval`，它会获取 Goroutine 以及调用方的程序计数器，然后调用 `runtime.newproc1` 函数获取新的 Goroutine 结构体、将其加入处理器的运行队列并在满足条件时调用 `runtime.wakep` 唤醒新的处理执行 Goroutine.
+使用 Go 语言的 `go` 关键字，编译器会通过 `cmd/compile/internal/gc.state.stmt` 和 `cmd/compile/internal/gc.state.call` 两个方法**将该关键字转换成 `runtime.newproc` 函数调用**, 入参是参数大小和表示函数的指针 `funcval`，它会获取 Goroutine 以及调用方的程序计数器，然后调用 `runtime.newproc1` 函数获取新的 Goroutine 结构体、将其加入处理器的运行队列并在满足条件时调用 `runtime.wakep` 唤醒新的处理执行 Goroutine.
 
 `runtime.newproc1` 会根据传入参数初始化一个 `g` 结构体，我们可以将该函数分成以下几个部分介绍它的实现：
 
@@ -966,6 +1078,17 @@ Runtime 会在程序启动的时候，创建 `M` 个线程（CPU 执行调度的
 1. 从本地运行队列、全局运行队列中查找；
 2. 从网络轮询器中查找是否有 Goroutine 等待运行；
 3. 通过 `runtime.runqsteal` 尝试从其他随机的处理器中窃取待运行的 Goroutine，该函数还可能窃取处理器的计时器；
+
+**main goroutine 和普通 goroutine 的退出过程：**
+
+- 对于 main goroutine，在执行完用户定义的 main 函数的所有代码后，直接调用 `exit(0)` 退出整个进程，非常霸道。
+
+- 对于普通 goroutine 需要经历一系列的过程。先是跳转到提前设置好的 `goexit` 函数的第二条指令，然后调用 `runtime.goexit1`，接着调用 mcall(goexit0)，而 mcall 函数会切换到 `g0` 栈，运行 `goexit0` 函数，清理 goroutine 的一些字段，并将其添加到 goroutine 缓存池里，然后进入 `schedule` 调度循环。到这里，普通 goroutine 才算完成使命。
+
+**循环运转**
+栈空间在调用函数时会自动“增大”，而函数返回时，会自动“减小”，这里的增大和减小是指栈顶指针 SP 的变化。上述这些函数都没有返回，说明调用者不需要用到被调用者的返回值，有点像“尾递归”。
+
+因为 g0 一直没有动过，所有它之前保存的 sp 还能继续使用。每一次调度循环都会覆盖上一次调度循环的栈数据，完美！
 
 ### 3.x 触发调度
 
@@ -1009,6 +1132,12 @@ Runtime 会在程序启动的时候，创建 `M` 个线程（CPU 执行调度的
       - 当我们通过 `runtime.pidleget` 获取到闲置的处理器时就会在该处理器上执行 Goroutine；
       - 在其它情况下，我们会将当前 Goroutine 放到全局的运行队列中，等待调度器的调度
 
+#### sysmon
+
+- sysmon 执行一个无限循环，一开始每次循环休眠 20us，之后（1 ms 后）每次休眠时间倍增，最终每一轮都会休眠 10ms。
+
+- sysmon 中会进行 netpool（获取 fd 事件）、retake（抢占）、forcegc（按时间强制执行 gc），scavenge heap（释放自由列表中多余的项减少内存占用）等处理。
+
 #### 协作式调度
 
 `runtime.Gosched` 函数会主动让出处理器，允许其他 Goroutine 运行。该函数无法挂起 Goroutine，调度器可能会将当前 Goroutine 调度到其他线程上：
@@ -1037,6 +1166,8 @@ Go 语言的运行时会通过调度器改变线程的所有权，它也提供�
 - 然后把第⼀个 `g` 结构体对象通过返回值的⽅式返回给调⽤函数，其它的则通过 `runqput` 函数放⼊当前⼯作线程的本地运⾏队列。
 *计算应该从全局运⾏队列中拿⾛多少个 goroutine 时根据 p 的数量（gomaxprocs）做了负载均衡。*
 - 如果没有从全局运⾏队列中获取到 goroutine，那么接下来就在⼯作线程的本地运⾏队列中寻找需要运⾏的goroutine。
+
+**单核线程当本地 P 中的对列满了再添加第 257 个 g 的时候会分配一半的 g 到全局队列中去**.
 
 #### 3.3 从⼯作线程本地运⾏队列中获取 goroutine
 
