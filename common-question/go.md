@@ -96,7 +96,6 @@
 1. **gRPC主要用于公司内部的服务调用，性能消耗低，传输效率高，服务治理方便。**
 2. **Restful主要用于对外，比如提供接口给前端调用，提供外部服务给其他人调用等，**
 
-
 ### 1.5 context
 
 #### 1.5.1 context 引入
@@ -104,7 +103,7 @@
 多并发情况下：
 
 - 使用 waitgroup 等待协程结束
-  - 优点是使用等待组的并发控制模型，尤其适用于好多个goroutine协同做一件事情的时候，因为每个goroutine做的都是这件事情的一部分，只有全部的goroutine都完成，这件事情才算完成；
+  - 优点是使用等待组的并发控制模型，尤其适用于好多个goroutine协同做一件事情的时候，因为每个goroutine做的都是这件事情的一部分，只有全部的 goroutine 都完成，这件事情才算完成；
   - 这种方式的缺陷：在实际生产中，需要我们主动的通知某一个 goroutine 结束。
 - 使用通道 channel + select
   - 优点：比较优雅，
@@ -150,6 +149,176 @@ func WithValue(parent Context, key, val interface{}) Context
 - 不要向函数传入一个 `nil` 的 context，如果你实在不知道传什么就用 `context：todo`。
 - 不要把本应该作为函数参数的类型塞到 context 中，context 存储的应该是一些共同的数据。例如：登陆的 session、cookie 等。
 - 同一个 context 可能会被传递到多个 goroutine，别担心，context 是并发安全的。
+
+### 1.6 map
+
+#### map 遍历
+
+```go
+// 生成随机数 r
+r := uintptr(fastrand())
+if h.B > 31-bucketCntBits {
+    r += uintptr(fastrand()) << 31
+}
+
+// 从哪个 bucket 开始遍历
+it.startBucket = r & (uintptr(1)<<h.B - 1)
+// 从 bucket 的哪个 cell 开始遍历
+it.offset = uint8(r >> h.B & (bucketCnt - 1))
+```
+
+例如，B = 2，那 uintptr(1)<<h.B - 1 结果就是 3，低 8 位为 0000 0011，将 r 与之相与，就可以得到一个 0~3 的 bucket 序号；bucketCnt - 1 等于 7，低 8 位为 0000 0111，将 r 右移 2 位后，与 7 相与，就可以得到一个 0~7 号的 cell。
+
+首先根据 B 进行位运算得到起始 Buckets，然后与 7 进行位运算得到起始槽位 cell，然后开始进行遍历，最后再遍历当前桶槽位之前的 cell，如果是在扩容阶段则需要进行老 Buckets 是否迁移完成的判断，如果迁移完成直接进行遍历，没有进行判断是否是加倍扩容，加倍扩容则需要拿出到当前新桶的元素进行迁移，然后继续进行，知道返回起始桶的 cell 前位置。
+
+#### map 插入或更新
+
+对 key 计算 hash 值，根据 hash 值按照之前的流程，找到要赋值的位置（可能是插入新 key，也可能是更新老 key），对相应位置进行赋值。
+
+**核心还是一个双层循环，外层遍历 `bucket` 和它的 `overflow bucket`，内层遍历整个 `bucket` 的各个 cell**。
+
+**插入的大致过程**：
+
+1. **首先会检查 map 的标志位 `flags`**。**如果 `flags` 的写标志位此时被置 1 了，说明有其他协程在执行“写”操作，进而导致程序 panic**。这也说明了 map 对协程是不安全的。
+
+2. **定位 map key**
+
+   - 如果 map 处在扩容的过程中，那么当 key 定位到了某个 bucket 后，需要确保这个 bucket 对应的老 bucket 完成了迁移过程。**即老 bucket 里的 key 都要迁移到新的 bucket 中来（分裂到 2 个新 bucket），才能在新的 bucket 中进行插入或者更新的操作**。
+
+   - 准备两个指针，一个（`inserti`）指向 `key` 的 hash 值在 `tophash` 数组所处的位置，另一个(insertk)指向 `cell` 的位置（也就是 `key` 最终放置的地址），当然，对应 `value` 的位置就很容易定位出来了。这三者实际上都是关联的，在 `tophash` 数组中的索引位置决定了 `key` 在整个 bucket 中的位置（共 8 个 key），而 `value` 的位置需要“跨过” 8 个 key 的长度。
+
+   - 在循环的过程中，`inserti` 和 `insertk` 分别指向第一个找到的空闲的 `cell`。如果之后在 `map` 没有找到 `key` 的存在，也就是说原来 `map` 中没有此 `key`，这意味着插入新 `key`。那最终 `key` 的安置地址就是第一次发现的“空位”（tophash 是 empty）。
+
+   - 如果这个 `bucket` 的 8 个 `key` 都已经放置满了，那在跳出循环后，发现 `inserti` 和 `insertk` 都是空，这时候需要在 `bucket` 后面挂上 `overflow bucket`。当然，也有可能是在 `overflow bucket` 后面再挂上一个 `overflow bucket`。这就说明，太多 `key` hash 到了此 `bucket`。
+
+3. **最后，会更新 map 相关的值**，如果是插入新 key，map 的元素数量字段 `count` 值会加 1；在函数之初设置的 `hashWriting` 写标志出会清零。
+
+#### map 删除
+
+1. 它首先会检查 `h.flags` 标志，如果发现写标位是 1，直接 `panic`，因为这表明有其他协程同时在进行写操作。
+
+2. 计算 `key` 的哈希，找到落入的 bucket。检查此 `map` 如果正在扩容的过程中，直接触发一次搬迁操作。
+删除操作同样是两层循环，核心还是找到 key 的具体位置。寻找过程都是类似的，在 bucket 中挨个 cell 寻找。
+
+3. 找到对应位置后，对 `key` 或者 `value` 进行“清零”操作：
+
+4. 最后，将 `count` 值减 1，将对应位置的 `tophash` 值置成 `Empty`。
+
+#### map 总结
+
+- **无法对 map 的key 和 value 取地址**
+- **在查找、赋值、遍历、删除的过程中都会检测写标志**，一旦发现写标志置位（等于1），则直接 panic。赋值和删除函数在检测完写标志是复位之后，先将写标志位置位，才会进行之后的操作。
+- **`map` 的 `value` 本身是不可寻址的**
+
+    因为 `map` 中的值会在内存中移动，并且旧的指针地址在 `map` 改变时会变得⽆效。故如果需要修改 `map` 值，可以将 `map` 中的⾮指针类型 `value` ，修改为指针类型，⽐如使⽤ `map[string]*Student` .
+
+    ```go
+    type Student struct {
+        Name string
+    }
+
+    func main() {
+        student := map[string]*Student{"name": {"test"}}
+        student["name"].Name = "a"
+        fmt.Println(student["name"])
+    }
+    ```
+
+- **map 是并发读写不安全的**
+
+    ```go
+    type UserAges struct {
+        ages map[string]int
+        sync.Mutex
+    }
+
+    func (ua *UserAges) Add(name string, age int) {
+        ua.Lock()
+        defer ua.Unlock()
+        ua.ages[name] = age
+    }
+    func (ua *UserAges) Get(name string) int {
+        if age, ok := ua.ages[name]; ok {
+            return age
+        }
+        return -1
+    }
+    ```
+
+    在执⾏ `Get` ⽅法时可能被 `panic`。
+    虽然有使⽤ `sync.Mutex` 做写锁，但是 `map` 是并发读写不安全的。**`map` 属于引⽤类型，并发读写时多个协程⻅是通过指针访问同⼀个地址，即访问共享变量，此时同时读写资源存在竞争关系**。会报错误信息:`“fatal error: oncurrent map read and map write”`。
+
+    因此，在 `Get` 中也需要加锁，因为这⾥只是读，建议使⽤读写 `sync.RWMutex` 。
+
+- **sync.map 没有 len 方法**
+
+### 1.7 接口
+
+### 自动检测类型是否实现接口
+
+```go
+var _ io.Writer = (*myWriter)(nil)
+var _ io.Writer = myWriter{}
+```
+
+上述赋值语句会发生隐式地类型转换，在转换的过程中，编译器会检测等号右边的类型是否实现了等号左边接口所规定的函数。
+
+### 1.8 go 内存泄漏
+
+go 中的内存泄露一般都是 goroutine 泄露，就是 goroutine 没有被关闭，或者没有添加超时控制，让goroutine一只处于阻塞状态，不能被 `GC`。
+
+#### 1. 暂时性内存泄露
+
+- 获取长字符串中的一段导致长字符串未释放
+- 获取长 `slice` 中的一段导致长 `slice` 未释放
+- 在长 `slice` 新建 `slice` 导致泄漏
+
+`string` 相比于切片少了一个容量的 `cap` 字段，可以把 `string` 当成一个只读的切片类型。
+**获取长`string` 或切片中的一段内容，由于新生成的对象和老的 `string` 或切片共用一个内存空间，会导致老的 `string` 和切片资源暂时得不到释放，造成短暂的内存泄露**。
+比如切片引用很短的一段字符串，但是字符串又足够长，重复使用并长时间不结束，未被引用的部分就造成了泄漏。
+
+#### 2. 永久性内存泄露
+
+- `goroutine` 泄漏
+    goroutine 引用的 `channel`，是不会被 gc，并且 channel 会使当前引用的 goroutine 一直阻塞，直到接收到退出的信号。
+
+    1. **发送端 channel 满了**
+    goroutine 作为生产者向 channel 发送信息，但是没有消费的 goroutine，或者消费的 goroutine 被错误的关闭了。导致 channel 被打满。
+    2. **接收端消费的 channel 为空**
+    作为消费者的 goroutine,等待消费 channel，但是上游的生产者不存在.
+    3. **生产者消费者异常退出，导致 channel 满了或者 channel 为空**
+    作为生产者的 goroutine 如果没有数据发送了，就需要主动退出当前的 goroutine,并且发出退出信号，这样下游消费的 goroutine,才能在 channel 消费完的时候，优雅的退出，不至于阻塞在没有发送者的channel 中。
+
+    作为消费者的 goroutine 一定要在 channel 没数据了，并且上游发送数据的 goroutine 已经退出的情况下，退出。这样，才不至于上游的发送者阻塞到一个没有消费者的 channel 中。
+- `time.Ticker` 未关闭导致泄漏
+- `Finalizer` 导致泄漏
+- `Deferring Function Call` 导致泄漏
+
+### 1.9 go读写文件数据有没有进入系统调用
+
+进入了系统调用
+
+```go
+func Create(name string) (*File, error) {
+    return OpenFile(name, O_RDWR|O_CREATE|O_TRUNC, 0666)
+}
+
+r, e = syscall.Open(name, flag|syscall.O_CLOEXEC, syscallMode(perm))
+```
+
+第一个参数是文件名，第二个参数是文件模式，第三个参数是文件权限，默认权限是0666
+O_RDWR O_CREATE O_TRUNC是file.go文件中定义好的一些常量，标识文件以什么模式打开，常见的模式有读写，只写，只读，权限依次降低。
+
+看到syscall对于文件的操作进行了封装，继续进入
+
+```go
+func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
+func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno)
+func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
+func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno)
+```
+
+这里，看到相似的函数有四个，后面没数字的，就是4个参数，后面为6的，就是6个参数。调用的是操作系统封装好的API。
 
 ## 4 select
 
@@ -292,121 +461,6 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
    - 表示前面的所有 `case` 都没有被执行，这里会解锁所有 `Channel` 并返回，意味着当前 `select` 结构中的收发都是非阻塞的；
 
 **除了将当前 Goroutine 对应的 `runtime.sudog` 结构体加入队列之外，这些结构体都会被串成链表附着在 Goroutine 上。在入队之后会调用 `runtime.gopark` 挂起当前 Goroutine 等待调度器的唤醒。**
-
-
-
-### 1.6 map
-
-#### map 遍历
-
-```go
-// 生成随机数 r
-r := uintptr(fastrand())
-if h.B > 31-bucketCntBits {
-    r += uintptr(fastrand()) << 31
-}
-
-// 从哪个 bucket 开始遍历
-it.startBucket = r & (uintptr(1)<<h.B - 1)
-// 从 bucket 的哪个 cell 开始遍历
-it.offset = uint8(r >> h.B & (bucketCnt - 1))
-```
-
-例如，B = 2，那 uintptr(1)<<h.B - 1 结果就是 3，低 8 位为 0000 0011，将 r 与之相与，就可以得到一个 0~3 的 bucket 序号；bucketCnt - 1 等于 7，低 8 位为 0000 0111，将 r 右移 2 位后，与 7 相与，就可以得到一个 0~7 号的 cell。
-
-首先根据 B 进行位运算得到起始 Buckets，然后与 7 进行位运算得到起始槽位 cell，然后开始进行遍历，最后再遍历当前桶槽位之前的 cell，如果是在扩容阶段则需要进行老 Buckets 是否迁移完成的判断，如果迁移完成直接进行遍历，没有进行判断是否是加倍扩容，加倍扩容则需要拿出到当前新桶的元素进行迁移，然后继续进行，知道返回起始桶的 cell 前位置。
-
-#### map 插入或更新
-
-对 key 计算 hash 值，根据 hash 值按照之前的流程，找到要赋值的位置（可能是插入新 key，也可能是更新老 key），对相应位置进行赋值。
-
-**核心还是一个双层循环，外层遍历 `bucket` 和它的 `overflow bucket`，内层遍历整个 `bucket` 的各个 cell**。
-
-**插入的大致过程**：
-
-1. **首先会检查 map 的标志位 `flags`**。**如果 `flags` 的写标志位此时被置 1 了，说明有其他协程在执行“写”操作，进而导致程序 panic**。这也说明了 map 对协程是不安全的。
-
-2. **定位 map key**
-
-   - 如果 map 处在扩容的过程中，那么当 key 定位到了某个 bucket 后，需要确保这个 bucket 对应的老 bucket 完成了迁移过程。**即老 bucket 里的 key 都要迁移到新的 bucket 中来（分裂到 2 个新 bucket），才能在新的 bucket 中进行插入或者更新的操作**。
-
-   - 准备两个指针，一个（`inserti`）指向 `key` 的 hash 值在 `tophash` 数组所处的位置，另一个(insertk)指向 `cell` 的位置（也就是 `key` 最终放置的地址），当然，对应 `value` 的位置就很容易定位出来了。这三者实际上都是关联的，在 `tophash` 数组中的索引位置决定了 `key` 在整个 bucket 中的位置（共 8 个 key），而 `value` 的位置需要“跨过” 8 个 key 的长度。
-
-   - 在循环的过程中，`inserti` 和 `insertk` 分别指向第一个找到的空闲的 `cell`。如果之后在 `map` 没有找到 `key` 的存在，也就是说原来 `map` 中没有此 `key`，这意味着插入新 `key`。那最终 `key` 的安置地址就是第一次发现的“空位”（tophash 是 empty）。
-
-   - 如果这个 `bucket` 的 8 个 `key` 都已经放置满了，那在跳出循环后，发现 `inserti` 和 `insertk` 都是空，这时候需要在 `bucket` 后面挂上 `overflow bucket`。当然，也有可能是在 `overflow bucket` 后面再挂上一个 `overflow bucket`。这就说明，太多 `key` hash 到了此 `bucket`。
-
-3. **最后，会更新 map 相关的值**，如果是插入新 key，map 的元素数量字段 `count` 值会加 1；在函数之初设置的 `hashWriting` 写标志出会清零。
-
-#### map 删除
-
-1. 它首先会检查 `h.flags` 标志，如果发现写标位是 1，直接 `panic`，因为这表明有其他协程同时在进行写操作。
-
-2. 计算 `key` 的哈希，找到落入的 bucket。检查此 `map` 如果正在扩容的过程中，直接触发一次搬迁操作。
-删除操作同样是两层循环，核心还是找到 key 的具体位置。寻找过程都是类似的，在 bucket 中挨个 cell 寻找。
-
-3. 找到对应位置后，对 `key` 或者 `value` 进行“清零”操作：
-
-4. 最后，将 `count` 值减 1，将对应位置的 `tophash` 值置成 `Empty`。
-
-#### map 总结
-
-- **无法对 map 的key 和 value 取地址**
-- **在查找、赋值、遍历、删除的过程中都会检测写标志**，一旦发现写标志置位（等于1），则直接 panic。赋值和删除函数在检测完写标志是复位之后，先将写标志位置位，才会进行之后的操作。
-- **`map` 的 `value` 本身是不可寻址的**
-
-    因为 `map` 中的值会在内存中移动，并且旧的指针地址在 `map` 改变时会变得⽆效。故如果需要修改 `map` 值，可以将 `map` 中的⾮指针类型 `value` ，修改为指针类型，⽐如使⽤ `map[string]*Student` .
-
-    ```go
-    type Student struct {
-        Name string
-    }
-
-    func main() {
-        student := map[string]*Student{"name": {"test"}}
-        student["name"].Name = "a"
-        fmt.Println(student["name"])
-    }
-    ```
-
-- **map 是并发读写不安全的**
-
-    ```go
-    type UserAges struct {
-        ages map[string]int
-        sync.Mutex
-    }
-
-    func (ua *UserAges) Add(name string, age int) {
-        ua.Lock()
-        defer ua.Unlock()
-        ua.ages[name] = age
-    }
-    func (ua *UserAges) Get(name string) int {
-        if age, ok := ua.ages[name]; ok {
-            return age
-        }
-        return -1
-    }
-    ```
-
-    在执⾏ `Get` ⽅法时可能被 `panic`。
-    虽然有使⽤ `sync.Mutex` 做写锁，但是 `map` 是并发读写不安全的。**`map` 属于引⽤类型，并发读写时多个协程⻅是通过指针访问同⼀个地址，即访问共享变量，此时同时读写资源存在竞争关系**。会报错误信息:`“fatal error: oncurrent map read and map write”`。
-
-    因此，在 `Get` 中也需要加锁，因为这⾥只是读，建议使⽤读写 `sync.RWMutex` 。
-
-- **sync.map 没有 len 方法**
-
-### 1.7 接口
-
-### 自动检测类型是否实现接口
-
-```go
-var _ io.Writer = (*myWriter)(nil)
-var _ io.Writer = myWriter{}
-```
-
-上述赋值语句会发生隐式地类型转换，在转换的过程中，编译器会检测等号右边的类型是否实现了等号左边接口所规定的函数。
 
 ## 2. 同步原语&互斥锁
 

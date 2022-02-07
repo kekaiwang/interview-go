@@ -47,4 +47,18 @@
 - `du --max-depth=1 -h`: 查看当前目录文件夹的使用情况
 - `du -sh /usr/`: 计算文件夹大小
 
+## Nginx
 
+Nginx由内核和模块组成，其中，内核的设计非常微小和简洁，完成的工作也非常简单，仅仅通过查找配置文件将客户端请求映射到一个locationblock（location是Nginx配置中的一个指令，用于URL匹配），而在这个location中所配置的每个指令将会启动不同的模块去完成相应的工作。
+
+Nginx的模块从结构上分为核心模块、基础模块和第三方模块：
+
+- 核心模块：HTTP模块、EVENT模块和MAIL模块
+- 基础模块：HTTP Access模块、HTTP FastCGI模块、HTTP Proxy模块和HTTP Rewrite模块，
+- 第三方模块：HTTP Upstream RequestHash模块、Notice模块和HTTP Access Key模块。
+
+Nginx的模块从功能上分为如下三类：
+
+- **Handlers（处理器模块）**。此类模块直接处理请求，并进行输出内容和修改headers信息等操作。Handlers处理器模块一般只能有一个。
+- **Filters （过滤器模块）**。此类模块主要对其他处理器模块输出的内容进行修改操作，最后由Nginx输出。
+- **Proxies（代理类模块）**。此类模块是Nginx的HTTP Upstream之类的模块，这些模块主要与后端一些服务比如FastCGI等进行交互，实现服务代理和负载均衡等功能。
