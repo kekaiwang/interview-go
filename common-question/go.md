@@ -1,8 +1,6 @@
-# go
-
 [toc]
 
-## 1. 常见基础题
+## 常见基础题
 
 ### 1.1 make 和 new 的区别
 
@@ -96,162 +94,6 @@
 1. **gRPC主要用于公司内部的服务调用，性能消耗低，传输效率高，服务治理方便。**
 2. **Restful主要用于对外，比如提供接口给前端调用，提供外部服务给其他人调用等，**
 
-### 1.5 context
-
-#### 1.5.1 context 引入
-
-多并发情况下：
-
-- 使用 waitgroup 等待协程结束
-  - 优点是使用等待组的并发控制模型，尤其适用于好多个goroutine协同做一件事情的时候，因为每个goroutine做的都是这件事情的一部分，只有全部的 goroutine 都完成，这件事情才算完成；
-  - 这种方式的缺陷：在实际生产中，需要我们主动的通知某一个 goroutine 结束。
-- 使用通道 channel + select
-  - 优点：比较优雅，
-  - 劣势：如果有很多 goroutine 都需要控制结束怎么办？，如果这些 goroutine 又衍生了其它更多的goroutine 怎么办？
-
-context 主要用来在 goroutine 之间传递上下文信息，包括：**取消信号、超时时间、截止时间、k-v** 等。
-
-1. `Deadline` — 返回 `context.Context` 被取消的时间，也就是完成工作的截止日期；
-2. `Done` — 返回一个 Channel，这个 Channel 会在当前工作完成或者上下文被取消后关闭，多次调用 `Done` 方法会返回同一个 Channel；
-3. `Err` — 返回 `context.Context` 结束的原因，它只会在 `Done` 方法对应的 Channel 关闭时返回非空的值；
-    - 如果 `context.Context` 被取消，会返回 `Canceled` 错误；
-    - 如果 `context.Context` 超时，会返回 `DeadlineExceeded` 错误；
-4. `Value` — 从 `context.Context` 中获取键对应的值，对于同一个上下文来说，多次调用 `Value` 并传入相同的 `Key` 会返回相同的结果，该方法可以用来传递请求特定的数据；
-
-- `Background()` 主要用于 `main` 函数、初始化以及测试代码中，作为 `Context` 这个树结构的最顶层的 Context，也就是根 Context。
-- `TODO()`，它目前还不知道具体的使用场景，如果我们不知道该使用什么 Context 的时候，可以使用这个。
-
-它们两个本质上都是 `emptyCtx` 结构体类型，是一个不可取消，没有设置截止时间，没有携带任何值的 Context。
-
-#### 1.5.2 Context的继承衍生
-
-```go
-func WithCancel(parent Context) (ctx Context, cancel CancelFunc)
-func WithDeadline(parent Context, deadline time.Time) (Context, CancelFunc)
-func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
-func WithValue(parent Context, key, val interface{}) Context
-```
-
-这四个 `With` 函数，接收的都有一个 `partent` 参数，就是父 Context，我们要基于这个父 `Context` 创建出子 Context 的意思，这种方式可以理解为子 Context 对父 Context 的继承，也可以理解为基于父 Context 的衍生。通过这些函数，就创建了一颗 Context 树，树的每个节点都可以有任意多个子节点，节点层级可以有任意多个。
-
-- `WithCancel` 函数，传递一个父 Context 作为参数，返回子 Context，以及一个取消函数用来取消 Context。`WithDeadline` 函数，和 `WithCancel` 差不多，它会多传递一个截止时间参数，意味着到了这个时间点，会自动取消 Context，当然我们也可以不等到这个时候，可以提前通过取消函数进行取消。
-
-- `WithTimeout` 和 `WithDeadline` 基本上一样，这个表示是超时自动取消，是多少时间后自动取消 Context 的意思。
-
-- `WithValue` 函数和取消 Context 无关，它是为了生成一个绑定了一个键值对数据的 Context，即给context设置值，这个绑定的数据可以通过 Context.Value 方法访问到.
-`WithValue` 创建 context 节点的过程实际上就是创建链表节点的过程。两个节点的 `key` 值是可以相等的，但它们是两个不同的 context 节点。查找的时候，会向上查找到最后一个挂载的 context 节点，也就是离得比较近的一个父节点 context。所以，整体上而言，用 `WithValue` 构造的其实是一个低效率的链表。
-
-上面3个函数都会返回一个取消函数CancelFunc，这是一个函数类型，它的定义非常简单 `type CancelFunc func()`,该函数可以取消一个 Context，以及这个节点 Context下所有的所有的 Context，不管有多少层级。
-
-#### 1.5.3 最佳实践
-
-- 不要将 Context 塞到结构体里。直接将 Context 类型作为函数的第一参数，而且一般都命名为 `ctx`。
-- 不要向函数传入一个 `nil` 的 context，如果你实在不知道传什么就用 `context：todo`。
-- 不要把本应该作为函数参数的类型塞到 context 中，context 存储的应该是一些共同的数据。例如：登陆的 session、cookie 等。
-- 同一个 context 可能会被传递到多个 goroutine，别担心，context 是并发安全的。
-
-### 1.6 map
-
-#### map 遍历
-
-```go
-// 生成随机数 r
-r := uintptr(fastrand())
-if h.B > 31-bucketCntBits {
-    r += uintptr(fastrand()) << 31
-}
-
-// 从哪个 bucket 开始遍历
-it.startBucket = r & (uintptr(1)<<h.B - 1)
-// 从 bucket 的哪个 cell 开始遍历
-it.offset = uint8(r >> h.B & (bucketCnt - 1))
-```
-
-例如，B = 2，那 uintptr(1)<<h.B - 1 结果就是 3，低 8 位为 0000 0011，将 r 与之相与，就可以得到一个 0~3 的 bucket 序号；bucketCnt - 1 等于 7，低 8 位为 0000 0111，将 r 右移 2 位后，与 7 相与，就可以得到一个 0~7 号的 cell。
-
-首先根据 B 进行位运算得到起始 Buckets，然后与 7 进行位运算得到起始槽位 cell，然后开始进行遍历，最后再遍历当前桶槽位之前的 cell，如果是在扩容阶段则需要进行老 Buckets 是否迁移完成的判断，如果迁移完成直接进行遍历，没有进行判断是否是加倍扩容，加倍扩容则需要拿出到当前新桶的元素进行迁移，然后继续进行，知道返回起始桶的 cell 前位置。
-
-#### map 插入或更新
-
-对 key 计算 hash 值，根据 hash 值按照之前的流程，找到要赋值的位置（可能是插入新 key，也可能是更新老 key），对相应位置进行赋值。
-
-**核心还是一个双层循环，外层遍历 `bucket` 和它的 `overflow bucket`，内层遍历整个 `bucket` 的各个 cell**。
-
-**插入的大致过程**：
-
-1. **首先会检查 map 的标志位 `flags`**。**如果 `flags` 的写标志位此时被置 1 了，说明有其他协程在执行“写”操作，进而导致程序 panic**。这也说明了 map 对协程是不安全的。
-
-2. **定位 map key**
-
-   - 如果 map 处在扩容的过程中，那么当 key 定位到了某个 bucket 后，需要确保这个 bucket 对应的老 bucket 完成了迁移过程。**即老 bucket 里的 key 都要迁移到新的 bucket 中来（分裂到 2 个新 bucket），才能在新的 bucket 中进行插入或者更新的操作**。
-
-   - 准备两个指针，一个（`inserti`）指向 `key` 的 hash 值在 `tophash` 数组所处的位置，另一个(insertk)指向 `cell` 的位置（也就是 `key` 最终放置的地址），当然，对应 `value` 的位置就很容易定位出来了。这三者实际上都是关联的，在 `tophash` 数组中的索引位置决定了 `key` 在整个 bucket 中的位置（共 8 个 key），而 `value` 的位置需要“跨过” 8 个 key 的长度。
-
-   - 在循环的过程中，`inserti` 和 `insertk` 分别指向第一个找到的空闲的 `cell`。如果之后在 `map` 没有找到 `key` 的存在，也就是说原来 `map` 中没有此 `key`，这意味着插入新 `key`。那最终 `key` 的安置地址就是第一次发现的“空位”（tophash 是 empty）。
-
-   - 如果这个 `bucket` 的 8 个 `key` 都已经放置满了，那在跳出循环后，发现 `inserti` 和 `insertk` 都是空，这时候需要在 `bucket` 后面挂上 `overflow bucket`。当然，也有可能是在 `overflow bucket` 后面再挂上一个 `overflow bucket`。这就说明，太多 `key` hash 到了此 `bucket`。
-
-3. **最后，会更新 map 相关的值**，如果是插入新 key，map 的元素数量字段 `count` 值会加 1；在函数之初设置的 `hashWriting` 写标志出会清零。
-
-#### map 删除
-
-1. 它首先会检查 `h.flags` 标志，如果发现写标位是 1，直接 `panic`，因为这表明有其他协程同时在进行写操作。
-
-2. 计算 `key` 的哈希，找到落入的 bucket。检查此 `map` 如果正在扩容的过程中，直接触发一次搬迁操作。
-删除操作同样是两层循环，核心还是找到 key 的具体位置。寻找过程都是类似的，在 bucket 中挨个 cell 寻找。
-
-3. 找到对应位置后，对 `key` 或者 `value` 进行“清零”操作：
-
-4. 最后，将 `count` 值减 1，将对应位置的 `tophash` 值置成 `Empty`。
-
-#### map 总结
-
-- **无法对 map 的key 和 value 取地址**
-- **在查找、赋值、遍历、删除的过程中都会检测写标志**，一旦发现写标志置位（等于1），则直接 panic。赋值和删除函数在检测完写标志是复位之后，先将写标志位置位，才会进行之后的操作。
-- **`map` 的 `value` 本身是不可寻址的**
-
-    因为 `map` 中的值会在内存中移动，并且旧的指针地址在 `map` 改变时会变得⽆效。故如果需要修改 `map` 值，可以将 `map` 中的⾮指针类型 `value` ，修改为指针类型，⽐如使⽤ `map[string]*Student` .
-
-    ```go
-    type Student struct {
-        Name string
-    }
-
-    func main() {
-        student := map[string]*Student{"name": {"test"}}
-        student["name"].Name = "a"
-        fmt.Println(student["name"])
-    }
-    ```
-
-- **map 是并发读写不安全的**
-
-    ```go
-    type UserAges struct {
-        ages map[string]int
-        sync.Mutex
-    }
-
-    func (ua *UserAges) Add(name string, age int) {
-        ua.Lock()
-        defer ua.Unlock()
-        ua.ages[name] = age
-    }
-    func (ua *UserAges) Get(name string) int {
-        if age, ok := ua.ages[name]; ok {
-            return age
-        }
-        return -1
-    }
-    ```
-
-    在执⾏ `Get` ⽅法时可能被 `panic`。
-    虽然有使⽤ `sync.Mutex` 做写锁，但是 `map` 是并发读写不安全的。**`map` 属于引⽤类型，并发读写时多个协程⻅是通过指针访问同⼀个地址，即访问共享变量，此时同时读写资源存在竞争关系**。会报错误信息:`“fatal error: oncurrent map read and map write”`。
-
-    因此，在 `Get` 中也需要加锁，因为这⾥只是读，建议使⽤读写 `sync.RWMutex` 。
-
-- **sync.map 没有 len 方法**
-
 ### 1.7 接口
 
 ### 自动检测类型是否实现接口
@@ -319,6 +161,185 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 ```
 
 这里，看到相似的函数有四个，后面没数字的，就是4个参数，后面为6的，就是6个参数。调用的是操作系统封装好的API。
+
+### runtime 包中的常用方法
+
+1. `NumCPU`: 返回当前系统的 CPU 核数量
+2. `GOMAXPROCS`: 设置最大的可同时使用的 CPU 核数
+
+    > 通过 `runtime.GOMAXPROCS` 函数，应用程序何以在运行期间设置运行时系统中得 P 最大数量。但这会引起 “Stop the World”。所以，应在应用程序最早的调用。并且最好是在运行Go程序之前设置好操作程序的环境变量 GOMAXPROCS，而不是在程序中调用 runtime.GOMAXPROCS 函数。
+
+    无论我们传递给函数的整数值是什么值，运行时系统的P最大值总会在1~256之间。
+
+3. `Gosched`:让当前线程让出 cpu 以让其它线程运行,它不会挂起当前线程，因此当前线程未来会继续执行  
+    这个函数的作用是让当前 goroutine 让出 CPU，当一个 goroutine 发生阻塞，Go 会自动地把与该 goroutine 处于同一系统线程的其他 goroutine 转移到另一个系统线程上去，以使这些 goroutine 不阻塞。
+4. `Goexit`: 退出当前 goroutine(但是defer语句会照常执行)
+5. `NumGoroutine`: 返回正在执行和排队的任务总数  
+  runtime.NumGoroutine 函数在被调用后，会返回系统中的处于特定状态的 Goroutine 的数量。这里的特指是指 Grunnable\Gruning\Gsyscall\Gwaition。处于这些状态的 Groutine 即被看做是活跃的或者说正在被调度。
+注意：垃圾回收所在 Groutine 的状态也处于这个范围内的话，也会被纳入该计数器。
+6. `GOOS`: 目标操作系统
+7. `GC`: 会让运行时系统进行一次强制性的垃圾收集
+  1.强制的垃圾回收：不管怎样，都要进行的垃圾回收。2.非强制的垃圾回收：只会在一定条件下进行的垃圾回收（即运行时，系统自上次垃圾回收之后新申请的堆内存的单元（也成为单元增量）达到指定的数值）。
+8. `GOROOT`: 获取 goroot 目录
+9. `GOOS`: 查看目标操作系统
+
+## slice
+
+## map
+
+### map 遍历
+
+```go
+// 生成随机数 r
+r := uintptr(fastrand())
+if h.B > 31-bucketCntBits {
+    r += uintptr(fastrand()) << 31
+}
+
+// 从哪个 bucket 开始遍历
+it.startBucket = r & (uintptr(1)<<h.B - 1)
+// 从 bucket 的哪个 cell 开始遍历
+it.offset = uint8(r >> h.B & (bucketCnt - 1))
+```
+
+例如，B = 2，那 uintptr(1)<<h.B - 1 结果就是 3，低 8 位为 0000 0011，将 r 与之相与，就可以得到一个 0~3 的 bucket 序号；bucketCnt - 1 等于 7，低 8 位为 0000 0111，将 r 右移 2 位后，与 7 相与，就可以得到一个 0~7 号的 cell。
+
+首先根据 B 进行位运算得到起始 Buckets，然后与 7 进行位运算得到起始槽位 cell，然后开始进行遍历，最后再遍历当前桶槽位之前的 cell，如果是在扩容阶段则需要进行老 Buckets 是否迁移完成的判断，如果迁移完成直接进行遍历，没有进行判断是否是加倍扩容，加倍扩容则需要拿出到当前新桶的元素进行迁移，然后继续进行，知道返回起始桶的 cell 前位置。
+
+### map 插入或更新
+
+对 key 计算 hash 值，根据 hash 值按照之前的流程，找到要赋值的位置（可能是插入新 key，也可能是更新老 key），对相应位置进行赋值。
+
+**核心还是一个双层循环，外层遍历 `bucket` 和它的 `overflow bucket`，内层遍历整个 `bucket` 的各个 cell**。
+
+**插入的大致过程**：
+
+1. **首先会检查 map 的标志位 `flags`**。**如果 `flags` 的写标志位此时被置 1 了，说明有其他协程在执行“写”操作，进而导致程序 panic**。这也说明了 map 对协程是不安全的。
+
+2. **定位 map key**
+
+   - 如果 map 处在扩容的过程中，那么当 key 定位到了某个 bucket 后，需要确保这个 bucket 对应的老 bucket 完成了迁移过程。**即老 bucket 里的 key 都要迁移到新的 bucket 中来（分裂到 2 个新 bucket），才能在新的 bucket 中进行插入或者更新的操作**。
+
+   - 准备两个指针，一个（`inserti`）指向 `key` 的 hash 值在 `tophash` 数组所处的位置，另一个(insertk)指向 `cell` 的位置（也就是 `key` 最终放置的地址），当然，对应 `value` 的位置就很容易定位出来了。这三者实际上都是关联的，在 `tophash` 数组中的索引位置决定了 `key` 在整个 bucket 中的位置（共 8 个 key），而 `value` 的位置需要“跨过” 8 个 key 的长度。
+
+   - 在循环的过程中，`inserti` 和 `insertk` 分别指向第一个找到的空闲的 `cell`。如果之后在 `map` 没有找到 `key` 的存在，也就是说原来 `map` 中没有此 `key`，这意味着插入新 `key`。那最终 `key` 的安置地址就是第一次发现的“空位”（tophash 是 empty）。
+
+   - 如果这个 `bucket` 的 8 个 `key` 都已经放置满了，那在跳出循环后，发现 `inserti` 和 `insertk` 都是空，这时候需要在 `bucket` 后面挂上 `overflow bucket`。当然，也有可能是在 `overflow bucket` 后面再挂上一个 `overflow bucket`。这就说明，太多 `key` hash 到了此 `bucket`。
+
+3. **最后，会更新 map 相关的值**，如果是插入新 key，map 的元素数量字段 `count` 值会加 1；在函数之初设置的 `hashWriting` 写标志出会清零。
+
+### map 删除
+
+1. 它首先会检查 `h.flags` 标志，如果发现写标位是 1，直接 `panic`，因为这表明有其他协程同时在进行写操作。
+
+2. 计算 `key` 的哈希，找到落入的 bucket。检查此 `map` 如果正在扩容的过程中，直接触发一次搬迁操作。
+删除操作同样是两层循环，核心还是找到 key 的具体位置。寻找过程都是类似的，在 bucket 中挨个 cell 寻找。
+
+3. 找到对应位置后，对 `key` 或者 `value` 进行“清零”操作：
+
+4. 最后，将 `count` 值减 1，将对应位置的 `tophash` 值置成 `Empty`。
+
+### map 总结
+
+- **无法对 map 的key 和 value 取地址**
+- **在查找、赋值、遍历、删除的过程中都会检测写标志**，一旦发现写标志置位（等于1），则直接 panic。赋值和删除函数在检测完写标志是复位之后，先将写标志位置位，才会进行之后的操作。
+- **`map` 的 `value` 本身是不可寻址的**
+
+    因为 `map` 中的值会在内存中移动，并且旧的指针地址在 `map` 改变时会变得⽆效。故如果需要修改 `map` 值，可以将 `map` 中的⾮指针类型 `value` ，修改为指针类型，⽐如使⽤ `map[string]*Student` .
+
+    ```go
+    type Student struct {
+        Name string
+    }
+
+    func main() {
+        student := map[string]*Student{"name": {"test"}}
+        student["name"].Name = "a"
+        fmt.Println(student["name"])
+    }
+    ```
+
+- **map 是并发读写不安全的**
+
+    ```go
+    type UserAges struct {
+        ages map[string]int
+        sync.Mutex
+    }
+
+    func (ua *UserAges) Add(name string, age int) {
+        ua.Lock()
+        defer ua.Unlock()
+        ua.ages[name] = age
+    }
+    func (ua *UserAges) Get(name string) int {
+        if age, ok := ua.ages[name]; ok {
+            return age
+        }
+        return -1
+    }
+    ```
+
+    在执⾏ `Get` ⽅法时可能被 `panic`。
+    虽然有使⽤ `sync.Mutex` 做写锁，但是 `map` 是并发读写不安全的。**`map` 属于引⽤类型，并发读写时多个协程⻅是通过指针访问同⼀个地址，即访问共享变量，此时同时读写资源存在竞争关系**。会报错误信息:`“fatal error: oncurrent map read and map write”`。
+
+    因此，在 `Get` 中也需要加锁，因为这⾥只是读，建议使⽤读写 `sync.RWMutex` 。
+
+- **sync.map 没有 len 方法**
+
+## context
+
+### context 引入
+
+多并发情况下：
+
+- 使用 waitgroup 等待协程结束
+  - 优点是使用等待组的并发控制模型，尤其适用于好多个goroutine协同做一件事情的时候，因为每个goroutine做的都是这件事情的一部分，只有全部的 goroutine 都完成，这件事情才算完成；
+  - 这种方式的缺陷：在实际生产中，需要我们主动的通知某一个 goroutine 结束。
+- 使用通道 channel + select
+  - 优点：比较优雅，
+  - 劣势：如果有很多 goroutine 都需要控制结束怎么办？，如果这些 goroutine 又衍生了其它更多的goroutine 怎么办？
+
+context 主要用来在 goroutine 之间传递上下文信息，包括：**取消信号、超时时间、截止时间、k-v** 等。
+
+1. `Deadline` — 返回 `context.Context` 被取消的时间，也就是完成工作的截止日期；
+2. `Done` — 返回一个 Channel，这个 Channel 会在当前工作完成或者上下文被取消后关闭，多次调用 `Done` 方法会返回同一个 Channel；
+3. `Err` — 返回 `context.Context` 结束的原因，它只会在 `Done` 方法对应的 Channel 关闭时返回非空的值；
+    - 如果 `context.Context` 被取消，会返回 `Canceled` 错误；
+    - 如果 `context.Context` 超时，会返回 `DeadlineExceeded` 错误；
+4. `Value` — 从 `context.Context` 中获取键对应的值，对于同一个上下文来说，多次调用 `Value` 并传入相同的 `Key` 会返回相同的结果，该方法可以用来传递请求特定的数据；
+
+- `Background()` 主要用于 `main` 函数、初始化以及测试代码中，作为 `Context` 这个树结构的最顶层的 Context，也就是根 Context。
+- `TODO()`，它目前还不知道具体的使用场景，如果我们不知道该使用什么 Context 的时候，可以使用这个。
+
+它们两个本质上都是 `emptyCtx` 结构体类型，是一个不可取消，没有设置截止时间，没有携带任何值的 Context。
+
+### Context的继承衍生
+
+```go
+func WithCancel(parent Context) (ctx Context, cancel CancelFunc)
+func WithDeadline(parent Context, deadline time.Time) (Context, CancelFunc)
+func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
+func WithValue(parent Context, key, val interface{}) Context
+```
+
+这四个 `With` 函数，接收的都有一个 `partent` 参数，就是父 Context，我们要基于这个父 `Context` 创建出子 Context 的意思，这种方式可以理解为子 Context 对父 Context 的继承，也可以理解为基于父 Context 的衍生。通过这些函数，就创建了一颗 Context 树，树的每个节点都可以有任意多个子节点，节点层级可以有任意多个。
+
+- `WithCancel` 函数，传递一个父 Context 作为参数，返回子 Context，以及一个取消函数用来取消 Context。`WithDeadline` 函数，和 `WithCancel` 差不多，它会多传递一个截止时间参数，意味着到了这个时间点，会自动取消 Context，当然我们也可以不等到这个时候，可以提前通过取消函数进行取消。
+
+- `WithTimeout` 和 `WithDeadline` 基本上一样，这个表示是超时自动取消，是多少时间后自动取消 Context 的意思。
+
+- `WithValue` 函数和取消 Context 无关，它是为了生成一个绑定了一个键值对数据的 Context，即给context设置值，这个绑定的数据可以通过 Context.Value 方法访问到.
+`WithValue` 创建 context 节点的过程实际上就是创建链表节点的过程。两个节点的 `key` 值是可以相等的，但它们是两个不同的 context 节点。查找的时候，会向上查找到最后一个挂载的 context 节点，也就是离得比较近的一个父节点 context。所以，整体上而言，用 `WithValue` 构造的其实是一个低效率的链表。
+
+上面3个函数都会返回一个取消函数CancelFunc，这是一个函数类型，它的定义非常简单 `type CancelFunc func()`,该函数可以取消一个 Context，以及这个节点 Context下所有的所有的 Context，不管有多少层级。
+
+### context 最佳实践
+
+- 不要将 Context 塞到结构体里。直接将 Context 类型作为函数的第一参数，而且一般都命名为 `ctx`。
+- 不要向函数传入一个 `nil` 的 context，如果你实在不知道传什么就用 `context：todo`。
+- 不要把本应该作为函数参数的类型塞到 context 中，context 存储的应该是一些共同的数据。例如：登陆的 session、cookie 等。
+- 同一个 context 可能会被传递到多个 goroutine，别担心，context 是并发安全的。
 
 ## 4 select
 
@@ -724,7 +745,6 @@ type Once struct {
 - `sync.Once.Do` 方法中传入的函数只会被执行一次，哪怕函数中发生了 `panic`；
 - 两次调用 `sync.Once.Do` 方法传入不同的函数只会执行第一次调传入的函数；
 
-
 ### 2.6 cond
 
 `sync.Cond` 不是一个常用的同步机制，但是在条件长时间无法满足时，与使用 `for {}` 进行忙碌等待相比，`sync.Cond` 能够让出处理器的使用权，提高 CPU 的利用率。使用时我们也需要注意以下问题：
@@ -761,7 +781,7 @@ unsafe 包提供了 2 点重要的能力：
     ```
 
 2. 能通过 unsafe.Pointer 和 uintptr 进行转换，得到 hamp 字段的值，只不过，现在 count 变成二级指针了：
- 
+
     ```go
     func main() {
         mp := make(map[string]int)
@@ -973,26 +993,133 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 ### new 一个对象最后在堆上还是栈上就根据上面的逃逸分析进行回答
 
-## 5. GC 垃圾回收
+## 垃圾回收
 
-### 5.1 GC 策略
+追踪式标记清除
 
-1. 内存达到上限触发 GC
-就像上面的 `GOGC` 配置那样，当程序达到驻留内存的相应倍数时候，触发 GC， 默认值就是两倍于当前内存。
---
-    > GOGC 参数
-    `GOGC` 默认值是100，举个例子：你程序的上一次 GC 完，驻留内存是100MB，由于你 GOGC 设置的是100，所以下次你的内存达到 200MB 的时候就会触发一次 GC，如果你 GOGC 设置的是200，那么下次你的内存达到300MB的时候就会触发 GC。
+### GC 的根对象是什么？
 
-2. 时间达到触发 GC 的阈值
-垃圾收集器关注的第二个指标是两个垃圾收集器之间的延迟。如果它没有被触发超过两分钟，一个循环将被强制。
-3. **主动触发**，上面两种是**被动触发**，通过调用 `runtime.GC` 来触发 GC，此调用阻塞式地等待当前 GC 运行完毕。
+1. **全局变量**：程序在编译期就能确定的那些存在于程序整个生命周期的变量。
+2. **执行栈**：每个 goroutine 都包含自己的执行栈，这些执行栈上包含栈上的变量及指向分配的堆内存区块的指针。
+3. **寄存器**：寄存器的值可能表示一个指针，参与计算的这些指针可能指向某些赋值器分配的堆内存区块。
 
-### 5.2 GC 如何调优
+### 三色标记
+
+> 三色抽象只是一种描述追踪式回收器的方法，在实践中并没有实际含义，它的重要作用在于从逻辑上严密推导标记清理这种垃圾回收方法的正确性。
+
+垃圾回收器的视角来看，三色抽象规定了三种不同类型的对象，并用不同的颜色相称：
+
+- **白色对象**（可能死亡）：未被回收器访问到的对象。在回收开始阶段，所有对象均为白色，当回收结束后，白色对象均不可达。
+- **灰色对象**（波面）：已被回收器访问到的对象，但回收器需要对其中的一个或多个指针进行扫描，因为他们可能还指向白色对象。
+- **黑色对象**（确定存活）：已被回收器访问到的对象，其中所有字段都已被扫描，黑色对象中任何一个指针都不可能直接指向白色对象。
+
+这样三种不变性所定义的回收过程其实是一个波面不断前进的过程，这个波面同时也是黑色对象和白色对象的边界，灰色对象就是这个波面。
+
+**悬挂指针**，即指针没有指向特定类型的合法对象，影响了内存的安全性，想要并发或者增量地标记对象还是需要使用屏障技术。
+
+### 屏障技术
+
+- **强三色不变性** — 黑色对象不会指向白色对象，只会指向灰色对象或者黑色对象
+- **弱三色不变性** — 黑色对象指向的白色对象必须包含一条从灰色对象经由多个白色对象的可达路径
+
+#### 插入写屏障
+
+```go
+writePointer(slot, ptr):
+    shade(ptr)
+    *slot = ptr
+```
+
+Dijkstra 的插入写屏障是一种相对保守的屏障技术，**它会将有存活可能的对象都标记成灰色以满足强三色不变性**。
+
+垃圾收集和用户程序交替运行时将黑色对象 A 指向白色对象 B，会将对象 B 标记成灰色，完成插入写屏障也就满足了强三色不变性。
+
+插入式的 Dijkstra 写屏障虽然实现非常简单并且也能保证强三色不变性，但是它也有明显的缺点。因为栈上的对象在垃圾收集中也会被认为是根对象，所以为了保证内存的安全，Dijkstra 必须为栈上的对象增加写屏障或者在标记阶段完成重新对栈上的对象进行扫描，这两种方法各有各的缺点，前者会大幅度增加写入指针的额外开销，后者重新扫描栈对象时需要暂停程序，垃圾收集算法的设计者需要在这两者之间做出权衡。
+
+#### 删除写屏障
+
+会在老对象的引用被删除时，将白色的老对象涂成灰色，这样删除写屏障就可以保证弱三色不变性，老对象引用的下游对象一定可以被灰色对象引用。
+
+垃圾收集和用户程序交替运行时黑色对象 A 指向灰色对象 B，B 指向白色对象 C，此时 A 指向 C，因为灰色对象 B 指向白色对象 C，此时不触发删除写屏障，如果将灰色对象 B 原本指向白色对象 C 的指针删除，会将对象 C 标记成灰色，完成删除写屏障也就满足了强/弱三色不变性。
+
+#### 混合写屏障
+
+在 Go 语言 v1.7 版本之前，运行时会使用 Dijkstra 插入写屏障保证强三色不变性，但是运行时并没有在所有的垃圾收集根对象上开启插入写屏障。因为应用程序可能包含成百上千的 Goroutine，而垃圾收集的根对象一般包括全局变量和栈对象，如果运行时需要在几百个 Goroutine 的栈上都开启写屏障，会带来巨大的额外开销，**所以 Go 团队在实现上选择了在标记阶段完成时暂停程序、将所有栈对象标记为灰色并重新扫描，在活跃 Goroutine 非常多的程序中，重新扫描的过程需要占用 10 ~ 100ms 的时间**。
+
+**会将被覆盖的对象标记成灰色并在当前栈没有扫描时将新对象也标记成灰色**。
+
+为了移除栈的重扫描过程，除了引入混合写屏障之外，**在垃圾收集的标记阶段，我们还需要将创建的所有新对象都标记成黑色，防止新分配的栈内存和堆内存中的对象被错误地回收**，因为栈内存在标记阶段最终都会变为黑色，所以不再需要重新扫描栈空间。
+
+### 增量和并发
+
+- **增量垃圾收集** — 增量地标记和清除垃圾，降低应用程序暂停的最长时间
+
+    增量式（Incremental）的垃圾收集是减少程序最长暂停时间的一种方案，它可以将原本时间较长的暂停时间切分成多个更小的 GC 时间片，虽然从垃圾收集开始到结束的时间更长了，但是这也减少了应用程序暂停的最大时间；
+
+    为了保证垃圾收集的正确性，我们需要在垃圾收集开始前打开写屏障，这样用户程序修改内存都会先经过写屏障的处理，保证了堆内存中对象关系的强三色不变性或者弱三色不变性。虽然增量式的垃圾收集能够减少最大的程序暂停时间，但是增量式收集也会增加一次 GC 循环的总时间，在垃圾收集期间，因为写屏障的影响用户程序也需要承担额外的计算开销，所以增量式的垃圾收集也不是只带来好处的，但是总体来说还是利大于弊。
+
+- **并发垃圾收集** — 利用多核的计算资源，在用户程序执行时并发标记和清除垃圾
+
+    并发（Concurrent）的垃圾收集不仅能够减少程序的最长暂停时间，还能减少整个垃圾收集阶段的时间，通过开启读写屏障、利用多核优势与用户程序并行执行，并发垃圾收集器确实能够减少垃圾收集对应用程序的影响
+
+    虽然并发收集器能够与用户程序一起运行，但是并不是所有阶段都可以与用户程序一起运行，部分阶段还是需要暂停用户程序的，不过与传统的算法相比，并发的垃圾收集可以将能够并发执行的工作尽量并发执行；当然，因为读写屏障的引入，并发的垃圾收集器也一定会带来额外开销，不仅会增加垃圾收集的总时间，还会影响用户程序，这是我们在设计垃圾收集策略时必须要注意的。
+
+### 垃圾收集的阶段
+
+1. 清理终止阶段 **STW**
+    1. 暂停程序，所有的处理器在这时会进入安全点（Safe point）；
+    2. 如果当前垃圾收集循环是强制触发的，我们还需要处理还未被清理的内存管理单元；
+2. 标记阶段
+    1. 将状态切换至 `_GCmark`、开启写屏障、用户程序协助（Mutator Assists）并将根对象入队；
+    2. 恢复执行程序，标记进程和用于协助的用户程序会开始并发标记内存中的对象，**写屏障会将被覆盖的指针和新指针都标记成灰色，而所有新创建的对象都会被直接标记成黑色**；
+    3. 开始扫描根对象，包括所有 Goroutine 的栈、全局对象以及不在堆中的运行时数据结构，扫描 Goroutine 栈期间会暂停当前处理器；
+    4. 依次处理灰色队列中的对象，将对象标记成黑色并将它们指向的对象标记成灰色；
+    5. 使用分布式的终止算法检查剩余的工作，发现标记阶段完成后进入标记终止阶段；
+3. 标记终止阶段 **STW**
+    1. 暂停程序、将状态切换至 `_GCmarktermination` 并关闭辅助标记的用户程序；
+    2. 清理处理器上的线程缓存；
+4. 清理阶段
+    1. 将状态切换至 `_GCoff` 开始清理阶段，初始化清理状态并关闭写屏障；
+    2. 恢复用户程序，所有新创建的对象会标记成白色；
+    3. 后台并发清理所有的内存管理单元，当 Goroutine 申请新的内存管理单元时就会触发清理
+
+`runtime.work` 变量：该结构体中包含大量垃圾收集的相关字段，例如：表示完成的垃圾收集循环的次数、当前循环时间和 CPU 的利用率、垃圾收集的模式等等，我们会在后面的小节中见到该结构体中的更多字段。
+
+### GC 触发时机
+
+Go 语言中对 GC 的触发时机存在两种形式：
+
+1. **主动触发**，通过调用 `runtime.GC` 来触发 GC，此调用阻塞式地等待当前 GC 运行完毕。
+
+2. **被动触发**，分为两种方式：
+
+    - 使用系统监控，如果一定时间内没有触发，就会触发新的循环，该触发条件由 runtime.forcegcperiod 变量控制，默认为 2 分钟；
+    - 使用步调（Pacing）算法，其核心思想是控制内存增长的比例。
+
+3. **申请内存**
+
+    最后一个可能会触发垃圾收集的就是 `runtime.mallocgc` 了，我们在上一节内存分配器中曾经介绍过运行时会将堆上的对象按大小分成微对象、小对象和大对象三类，这三类对象的创建都可能会触发新的垃圾收集循环：
+
+    1. 当前线程的内存管理单元中不存在空闲空间时，创建微对象和小对象需要调用 `runtime.mcache.nextFree` 从中心缓存或者页堆中获取新的管理单元，在这时就可能触发垃圾收集；
+    2. 当用户程序申请分配 32KB 以上的大对象时，一定会构建 `runtime.gcTrigger` 结构体尝试触发垃圾收集；
+
+    通过堆内存触发垃圾收集需要比较 `runtime.mstats` 中的两个字段 — 表示垃圾收集中存活对象字节数的 `heap_live` 和表示触发标记的堆内存大小的 `gc_trigger`；当内存中存活的对象字节数大于触发垃圾收集的堆大小时，新一轮的垃圾收集就会开始。在这里，我们将分别介绍这两个值的计算过程：
+
+    - `heap_live` — 为了减少锁竞争，运行时只会在中心缓存分配或者释放内存管理单元以及在堆上分配大对象时才会更新；
+    - `gc_trigger` — 在标记终止阶段调用 `runtime.gcSetTriggerRatio` 更新触发下一次垃圾收集的堆大小；
+
+### GC 如何调优
 
 - 通过 `go tool pprof` 和 `go tool trace` 等工具
 - 控制内存分配的速度，限制 goroutine 的数量，从而提高赋值器对 CPU 的利用率。
 - 减少并复用内存，例如使用 `sync.Pool` 来复用需要频繁创建临时对象，例如提前分配足够的内存来降低多余的拷贝。
 - 需要时，增大 `GOGC` 的值，降低 GC 的运行频率。
+    **GOGC 参数**
+    `GOGC` 默认值是100，举个例子：你程序的上一次 GC 完，驻留内存是100MB，由于你 GOGC 设置的是100，所以下次你的内存达到 200MB 的时候就会触发一次 GC，如果你 GOGC 设置的是200，那么下次你的内存达到300MB的时候就会触发 GC。
+
+### GC 跟不上分配的速度
+
+目前的 Go 实现中，当 GC 触发后，会首先进入并发标记的阶段。并发标记会设置一个标志，并在 mallocgc 调用时进行检查。当存在新的内存分配时，会暂停分配内存过快的那些 goroutine，并将其转去执行一些辅助标记（Mark Assist）的工作，从而达到放缓继续分配、辅助 GC 的标记工作的目的。
 
 ## 3. GMP&调度器
 
@@ -1024,8 +1151,6 @@ Runtime 会在程序启动的时候，创建 `M` 个线程（CPU 执行调度的
 在同一时刻，一个线程上只能跑一个 goroutine。当 goroutine 发生阻塞（例如上篇文章提到的向一个 channel 发送数据，被阻塞）时，runtime 会把当前 goroutine 调度走，让其他 goroutine 来执行。
 
 ### 3.2 schedule 调度
-
-
 
 *`Runtime` 运行时维护所有的 `goroutines`，并通过 `scheduler` 来进行调度。`Goroutines` 和 `threads` 是独立的，但是 `goroutines` 要依赖 `threads` 才能执行。*
 
@@ -1069,7 +1194,7 @@ Go 程序启动后，会给每个逻辑核心分配一个 `P`（Logical Processo
    - 然后主线程 tls 绑定 m0
    - 初始化 m0 并挂到 allm 中
    - 接下来是 procresize 函数运行
- 
+
     通过 `runtime.schedinit` 初始化调度器，在调度器初始函数执行的过程中会将 `maxmcount` 设置成 10000，这也就是一个 Go 语言程序能够创建的最大线程数，虽然最多可以创建 10000 个线程，但是可以同时运行的线程还是由 `GOMAXPROCS` 变量控制。
 
     **调用 `runtime.procresize` 的执行过程如下**
@@ -1211,7 +1336,7 @@ Go 语言的运行时会通过调度器改变线程的所有权，它也提供�
 - 为了保证调度的公平性，**每个工作线程每进行 61 次调度就需要优先从全局运行队列中获取 goroutine 出来运行**
     因为如果只调度本地运行队列中的 goroutine，则全局运行队列中的 goroutine 有可能得不到运行
     **所有工作线程都能访问全局队列，所以需要加锁获取 goroutine**
-- _如果从全局队列没有获取到 goroutine_，从与 `m` 关联的 `p` 的本地运行队列中获取 goroutine
+- 如果从全局队列没有获取到 goroutine，从与 `m` 关联的 `p` 的本地运行队列中获取 goroutine
 - **如果从本地运行队列和全局运行队列都没有找到需要运行的goroutine， 则调用 `findrunnable` 函数从其它工作线程的运行队列中偷取**，如果偷取不到，则当前工作线程进入睡眠，直到获取到需要运行的 goroutine 之后 findrunnable 函数才会返回。
 
 #### 3.2 从全局队列获取 goroutine
@@ -1320,3 +1445,42 @@ func main() {
 ```
 
 这个输出结果决定来⾃于调度器优先调度哪个 `G`。从 `runtime` 的源码可以看到，**当创建⼀个 `G` 时，会优先放⼊到下⼀个调度的 `runnext` 字段上作为下⼀次优先调度的 `G`。因此，最先输出的是最后创建的 `G`**，也就是9.
+
+## 继承与多态
+
+```go
+type People interface {
+    Speak(string) string
+}
+
+type Stduent struct{}
+
+func (stu *Stduent) Speak(think string) (talk string) {
+    if think == "love" {
+        talk = "You are a good boy"
+    } else {
+        talk = "hi"
+    }
+    return
+}
+
+func main() {
+    var peo People = Stduent{}
+    think := "love"
+    fmt.Println(peo.Speak(think))
+}
+```
+
+在 golang 中对多态的特点体现从语法上并不是很明显。
+
+我们知道发生多态的几个要素：
+
+1. 有 `interface` 接口，并且有接口定义的方法。
+2. 有子类去重写 `interface` 的接口。
+3. 有父类指针指向子类的具体对象
+
+那么，满足上述 3 个条件，就可以产生多态效果，就是，父类指针可以调用子类的具体方法。
+
+所以上述代码报错的地方在 `var peo People = Stduent{}` 这条语句， `Student{}` 已经重写了父类 `People{}` 中的 `Speak(string) string` 方法，那么只需要用父类指针指向子类对象即可。（Go 中不叫父类，这里是为了好理解）
+
+所以应该改成 `var peo People = &Student{}` 即可编译通过。（People 为 `interface` 类型，就是指针类型）
