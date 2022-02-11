@@ -183,6 +183,17 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 8. `GOROOT`: 获取 goroot 目录
 9. `GOOS`: 查看目标操作系统
 
+### golang中值类型和引用类型
+
+**值类型分别有**：int系列、float系列、bool、string、数组和结构体
+**引用类型有**：指针、slice切片、管道channel、接口interface、map、函数等
+值类型的特点是：变量直接存储值，内存通常在栈中分配
+引用类型的特点是：变量存储的是一个地址，这个地址对应的空间里才是真正存储的值，内存通常在堆中分配
+
+### json.Marshal
+
+`channel、function、complex`、循环引用的数据类型不能被 `json.Marshal` 序列化
+
 ## slice
 
 ## map
