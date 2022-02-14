@@ -13,6 +13,7 @@
     使用 `make` 可以创建一个非零值的引用对象
 
 - **`new` 用于各种类型的内存分配**，new 返回指针。
+  - `new` 无法初始化对应字段或者结构体的零值
     分配一片零值的内存空间，并返回指向这片内存空间的指针 `value *T`
 
 ### 1.2 提高性能的写法
@@ -28,6 +29,7 @@
 ### 1.3 结构体能比较吗？
 
 - Go 结构体有时候并不能直接比较，**当其基本类型包含：`slice`、`map`、`function` 时，是不能比较的**。若强行比较，就会导致出现例子中的直接报错的情况。
+- `slice` 不能直接进行比较，可以使用 `reflect.DeepEqual(x, y interface) bool` 进行深度比较
 - 指针引用，其虽然都是 `new(string)`，从表象来看是一个东西，但其具体返回的地址是不一样的
     可以使用反射方法 `reflect.DeepEqual` 进行比较
 
@@ -93,17 +95,6 @@
 
 1. **gRPC主要用于公司内部的服务调用，性能消耗低，传输效率高，服务治理方便。**
 2. **Restful主要用于对外，比如提供接口给前端调用，提供外部服务给其他人调用等，**
-
-### 1.7 接口
-
-### 自动检测类型是否实现接口
-
-```go
-var _ io.Writer = (*myWriter)(nil)
-var _ io.Writer = myWriter{}
-```
-
-上述赋值语句会发生隐式地类型转换，在转换的过程中，编译器会检测等号右边的类型是否实现了等号左边接口所规定的函数。
 
 ### 1.8 go 内存泄漏
 
@@ -194,7 +185,64 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 
 `channel、function、complex`、循环引用的数据类型不能被 `json.Marshal` 序列化
 
+### atomic
+
+```go
+for {
+    v := value
+    if atomic.CompareAndSwapInt32(&value, v, (v+delta)) {
+        break
+    }
+}
+```
+
+- `atomic.CompareAndSwapInt32` 不需要 `for` 循环调用
+
+### byte
+
+```go
+var i byte
+go func() {
+    for i = 0; i <= 255; i++ {
+
+    }
+}()
+```
+
+`byte` 其实被 `alias` 到 `uint8` 上了。所以上⾯的 `for` 循环会始终成⽴，因为 `i++` 到 `i=255` 的时候会溢出，i <= 255 ⼀定成⽴。
+
+## 类型系统
+
+内置类型、自定义类型
+不能给内置类型定义方法，接口类型是无效的方法接收者。
+
+### 类型元数据
+
+类型元数据：内置类型和自定义类型的类型描述信息，每种类型元数据都是全剧唯一的。这些类型元数据构成了 Go 语言的 “类型系统”。
+
+`runtime._type` 包含数据的基本 `header` 信息，后面跟随其他描述信息，比如 `slice` 类型的类型元数据等，**如果是自定义类型后面还跟随 `uncommontype` 结构体**。
+
+![image](https://mail.wangkekai.cn/1644829502867.jpg)
+
+- `type U int32` 基于 `int` 定义的新类型，有属于自己的类型元数据。
+- `type U2 = int32` 是 `int32` 的别名，等价于 int；U2 和 `int32` 会关联到同一个类型元数据属于同一种类型。
+**`rune` 和 `int32` 就是这样的关系**。
+
 ## slice
+
+### 常见经典题目
+
+```go
+func main() {
+    s := make([]int, 5)
+    s = append(s, 1, 2, 3)
+    fmt.Println(s)
+}
+
+// 0 0 0 0 0 1 2 3
+```
+
+**`make` 在初始化切⽚时指定了⻓度**，所以追加数据时会从 `len(s)` 位置开始填充数据
 
 ## map
 
@@ -237,7 +285,7 @@ it.offset = uint8(r >> h.B & (bucketCnt - 1))
 
    - 如果这个 `bucket` 的 8 个 `key` 都已经放置满了，那在跳出循环后，发现 `inserti` 和 `insertk` 都是空，这时候需要在 `bucket` 后面挂上 `overflow bucket`。当然，也有可能是在 `overflow bucket` 后面再挂上一个 `overflow bucket`。这就说明，太多 `key` hash 到了此 `bucket`。
 
-3. **最后，会更新 map 相关的值**，如果是插入新 key，map 的元素数量字段 `count` 值会加 1；在函数之初设置的 `hashWriting` 写标志出会清零。
+3. **最后，会更新 map 相关的值**，如果是插入新 key，map 的元素数量字段 `count` 值会加 1；在函数之初设置的 `hashWriting` 写标志处会清零。
 
 ### map 删除
 
@@ -256,8 +304,6 @@ it.offset = uint8(r >> h.B & (bucketCnt - 1))
 - **在查找、赋值、遍历、删除的过程中都会检测写标志**，一旦发现写标志置位（等于1），则直接 panic。赋值和删除函数在检测完写标志是复位之后，先将写标志位置位，才会进行之后的操作。
 - **`map` 的 `value` 本身是不可寻址的**
 
-    因为 `map` 中的值会在内存中移动，并且旧的指针地址在 `map` 改变时会变得⽆效。故如果需要修改 `map` 值，可以将 `map` 中的⾮指针类型 `value` ，修改为指针类型，⽐如使⽤ `map[string]*Student` .
-
     ```go
     type Student struct {
         Name string
@@ -269,6 +315,10 @@ it.offset = uint8(r >> h.B & (bucketCnt - 1))
         fmt.Println(student["name"])
     }
     ```
+
+    因为 `map` 中的值会在内存中移动，并且旧的指针地址在 `map` 改变时会变得⽆效。故如果需要修改 `map` 值，可以将 `map` 中的⾮指针类型 `value` ，修改为指针类型，⽐如使⽤ `map[string]*Student` 。
+
+   **`student["name"].Name = "a"` 不能直接进行赋值，`student["name"]` 返回的是两个参数，可以先通过变量接收后进行赋值修改。**
 
 - **map 是并发读写不安全的**
 
@@ -298,7 +348,20 @@ it.offset = uint8(r >> h.B & (bucketCnt - 1))
 
 - **sync.map 没有 len 方法**
 
+## 接口
+
+### 自动检测类型是否实现接口
+
+```go
+var _ io.Writer = (*myWriter)(nil)
+var _ io.Writer = myWriter{}
+```
+
+上述赋值语句会发生隐式地类型转换，在转换的过程中，编译器会检测等号右边的类型是否实现了等号左边接口所规定的函数。
+
 ## context
+
+一个接口，四种具体实现，六个函数。
 
 ### context 引入
 
@@ -502,7 +565,7 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 
 - `sync/rwmutex.go` 中注释可以知道，读写锁当有⼀个协程在等待写锁时，其他协程是不能获得读锁的
 
-- 加锁后复制变量，会将锁的状态也复制，所以 mu1 其实是已经加锁状态，再加锁会死锁。
+- **加锁后复制变量，会将锁的状态也复制，所以 mu1 其实是已经加锁状态，再加锁会死锁 `panic`**。
 
 ```go
 type MyMutex struct {
@@ -577,7 +640,7 @@ func (m *Mutex) lockSlow() {
 
 互斥锁的解锁过程 `sync.Mutex.Unlock` 与加锁过程相比就很简单，该过程会先使用 `sync/atomic.AddInt32` 函数快速解锁，这时会发生下面的两种情况：
 
-- 果该函数返回的新状态等于 0，当前 Goroutine 就成功解锁了互斥锁；
+- 如果该函数返回的新状态等于 0，当前 Goroutine 就成功解锁了互斥锁；
 - 如果该函数返回的新状态不等于 0，这段代码会调用 `sync.Mutex.unlockSlow` 开始慢速解锁：
 
 `sync.Mutex.unlockSlow` 解锁
@@ -734,7 +797,7 @@ type RWMutex struct {
 
 ### 2.4. waitgroup
 
-- `WaitGroup` 在调⽤ `Wait` 之后是不能再调⽤ `Add` ⽅法的。
+- **`WaitGroup` 在调⽤ `Wait` 之后是不能再调⽤ `Add` ⽅法的**。
 
 通过对 `sync.WaitGroup` 的分析和研究，我们能够得出以下结论：
 
@@ -983,8 +1046,10 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 ## 3. defer
 
-`defer` 关键字的实现跟 `go` 关键字很类似，不同的是它调⽤的是 `runtime.deferproc` ⽽不是 `runtime.newproc`。 在 `defer` 出现的地⽅，插⼊了指令 `call runtime.deferproc`，然后在函数返回之前的地⽅，插⼊指令 `call runtime.deferreturn`。 goroutine 的控制结构中，有⼀张表记录 `defer`，调⽤ `runtime.deferproc` 时会将需要 `defer` 的表达式记录在表中，⽽在调⽤ `runtime.deferreturn` 的时候，则会依次从 `defer` 表中出栈并执⾏。
-因此，题⽬最后输出顺序应该是 defer 定义顺序的倒序。 panic 错误并不能终⽌ defer 的执⾏。
+`defer` 关键字的实现跟 `go` 关键字很类似，不同的是它调⽤的是 `runtime.deferproc` ⽽不是 `runtime.newproc`。
+在 `defer` 出现的地⽅，插⼊了指令 `call runtime.deferproc`，然后在函数返回之前的地⽅，插⼊指令 `call runtime.deferreturn`。
+goroutine 的控制结构中，有⼀张表记录 `defer`，调⽤ `runtime.deferproc` 时会将需要 `defer` 的表达式记录在表中，⽽在调⽤ `runtime.deferreturn` 的时候，则会依次从 `defer` 表中出栈并执⾏。
+因此，题⽬最后输出顺序应该是 `defer` 定义顺序的倒序。 `panic` 错误并不能终⽌ `defer` 的执⾏。
 
 ## 4. 内存分配
 
@@ -1419,6 +1484,17 @@ func runqget(_p_ *p) (gp *g, inheritTime bool) {
 
 #### 正在执行的 goroutine 什么情况下让出执行权
 
+```go
+go func() {
+    for{}
+}()
+fmt.Println("Dropping mic")
+// Yield execution to force executing other goroutines
+runtime.Gosched()
+runtime.GC()
+fmt.Println("Done")
+```
+
 **正在被执⾏的 goroutine 发⽣以下情况时让出当前 goroutine 的执⾏权，并调度后⾯的goroutine 执⾏**：
 
 - **IO 操作**
@@ -1455,7 +1531,7 @@ func main() {
 }
 ```
 
-这个输出结果决定来⾃于调度器优先调度哪个 `G`。从 `runtime` 的源码可以看到，**当创建⼀个 `G` 时，会优先放⼊到下⼀个调度的 `runnext` 字段上作为下⼀次优先调度的 `G`。因此，最先输出的是最后创建的 `G`**，也就是9.
+这个输出结果决定来⾃于调度器优先调度哪个 `G`。从 `runtime` 的源码可以看到，**当创建⼀个 `G` 时，会优先放⼊到下⼀个调度的 `runnext` 字段上作为下⼀次优先调度的 `G`。因此，最先输出的是最后创建的 `G`**，也就是9。然后就是按照顺序插入的 g 队列了，最后的结果是 `9 10 10  ... 0 1 2 .. 8`
 
 ## 继承与多态
 
