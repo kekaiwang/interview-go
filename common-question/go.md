@@ -226,9 +226,28 @@ go func() {
 
 ![image](https://mail.wangkekai.cn/1644829502867.jpg)
 
+`moff` 记录的是这些方法的元数据组成的数组，相对于这个 `uncommontype` 结构体偏移了多少字节。
+方法元数据结构如下：
+
+```go
+type method struct {
+    name nameOff
+    mtyp typeOff
+    ifn  textOff
+    tfn  textOff
+}
+```
+
 - `type U int32` 基于 `int` 定义的新类型，有属于自己的类型元数据。
 - `type U2 = int32` 是 `int32` 的别名，等价于 int；U2 和 `int32` 会关联到同一个类型元数据属于同一种类型。
 **`rune` 和 `int32` 就是这样的关系**。
+
+下面所示非空接口 `r` 的静态类型是 `io.Reader`，动态类型是 `*os.File`。
+
+```go
+var f *os.File
+var r io.Reader = f
+```
 
 #### type.alg
 
@@ -242,6 +261,62 @@ type typeAlg struct {
 ```
 
 **而不可比较的类型，例如 `slice`，它的类型元数据里是没有提供可用的 equal 方法的。**
+
+## 接口
+
+### 自动检测类型是否实现接口
+
+```go
+var _ io.Writer = (*myWriter)(nil)
+var _ io.Writer = myWriter{}
+```
+
+上述赋值语句会发生隐式地类型转换，在转换的过程中，编译器会检测等号右边的类型是否实现了等号左边接口所规定的函数。
+
+### 装箱
+
+1. `interface{}` 被设计成一个容器，但它本质上是指针，可以直接装载地址，用来实现装载值的话，实际的内存要分配在别的地方，并把内存地址存储在这里。（convT64的作用就是分配这个存储值的内存空间，实际上 `runtime` 中有一系列的这类函数，如convT32、convTstring和convTslice等。）
+
+2. 通过 `staticuint64s` 这种优化方式，能够反向推断出：被 `convT64` 分配的这个 `uint64`，**它的值在语义层面是不可修改的，是个类似 `const` 的常量，这样设计主要是为了跟 `interface{}` 配合来模拟“装载值”**。
+
+3. **至于为什么这个值不可修改，因为interface{}只是一个容器，它支持把数据装入和取出，但是不支持直接在容器里修改**。这有些类似于Java和C#里的自动装箱，只不过interface{}是个万能包装类。
+
+**因为接口装载的动态类型是可以变化的，所以通过接口调用它的方法时，需要根据它背后的动态类型来确定究竟调用哪一种实现**，这也是面向对象编程中，接口的一个核心功能：**接口的一个核心功能：实现“多态”，也就是实现方法的“动态派发”**.
+
+### 动态派发
+
+对于动态派发来讲，编译阶段能够确定的有：
+（1）**要调用的方法的名字**；
+（2）**方法的原型（参数与返回值列表）**。
+
+实现动态派发要使用的函数地址表就存储在 `itab` 中。
+
+```go
+type itab struct {
+  inter *interfacetype
+  _type *_type
+  hash  uint32
+  _     [4]byte
+  fun   [1]uintptr
+}
+```
+
+（1）`itab.inter` 指向当前接口的类型元数据，记录着接口要求实现的方法列表；
+（2）`itab._type` 指向动态类型元数据，从 _type 到 `uncommontype`，再到 `[mcount]method`，可以找到该动态类型的方法集。
+
+**接口要求实现的方法列表与动态类型的方法集都是有序的，所以经过一次循环对比就可以确定该动态类型是否实现了特定接口**：
+（1）如果没有实现，那么 `itab.fun[0]` 就等于0；
+（2）如果实现了，就把动态类型实现的方法地址存储到itab.fun数组中。
+有了这样的itab，再通过接口调用方法时，就可以像C++的虚函数那样直接按数组下标读取地址了。
+
+### 包装方法
+
+编译器会为接收者为值类型的方法生成接收者为指针类型的方法，也就是所谓的“**包装方法**”。
+
+**接口是不能直接使用值接收者方法的，这就是编译器生成包装方法的根本原因。**
+
+（1）无论是嵌入值还是嵌入指针，值接收者方法始终能够被继承；
+（2）只有在能够拿到嵌入对象的地址时，才能继承指针接收者方法。
 
 ## slice
 
@@ -455,17 +530,6 @@ it.offset = uint8(r >> h.B & (bucketCnt - 1))
     因此，在 `Get` 中也需要加锁，因为这⾥只是读，建议使⽤读写 `sync.RWMutex` 。
 
 - **sync.map 没有 len 方法**
-
-## 接口
-
-### 自动检测类型是否实现接口
-
-```go
-var _ io.Writer = (*myWriter)(nil)
-var _ io.Writer = myWriter{}
-```
-
-上述赋值语句会发生隐式地类型转换，在转换的过程中，编译器会检测等号右边的类型是否实现了等号左边接口所规定的函数。
 
 ## context
 
@@ -1052,6 +1116,41 @@ Go 语言中，**不要通过共享内存来通信，而要通过通信来实现
 
 **channel 收发遵循先进先出 FIFO，分为有缓存和无缓存**，channel 中大致有 `buffer`(当缓冲区大小部位 0 时，是个 `ring buffer`)、`sendx` 和 `recvx` 收发的位置(`ring buffer` 记录实现)、`sendq`、`recvq` 当前 channel 因为缓冲区不足而阻塞的队列、使用双向链表存储、还有一个 `mutex` 锁控制并发、其他原属等。
 
+```go
+type hchan struct {
+    qcount   uint           // 数组长度，即已有元素个数
+    dataqsiz uint           // 数组容量，即可容纳元素个数
+    buf      unsafe.Pointer // 数组地址
+    elemsize uint16         // 元素大小
+    closed   uint32
+    elemtype *_type // 元素类型
+    sendx    uint   // 下一次写下标位置
+    recvx    uint   // 下一次读下标位置
+    recvq    waitq  // 读等待队列
+    sendq    waitq  // 写等待队列
+    lock     mutex
+}
+```
+
+- `qcount` — Channel 中的元素个数；
+- `dataqsiz` — Channel 中的循环队列的长度；
+- `buf` — Channel 的缓冲区数据指针；
+- `sendx` — Channel 的发送操作处理到的位置；
+- `recvx` — Channel 的接收操作处理到的位置；
+
+除此之外，`elemsize` 和 `elemtype` 分别表示当前 Channel 能够收发的元素类型和大小；`sendq` 和 `recvq` 存储了当前 Channel 由于缓冲区空间不足而阻塞的 Goroutine 列表，这些等待队列使用双向链表 `runtime.waitq` 表示，链表中所有的元素都是 `runtime.sudog` 结构：
+
+```go
+type waitq struct {
+    first *sudog
+    last  *sudog
+}
+```
+
+`runtime.sudog` 表示一个在等待列表中的 Goroutine，该结构中存储了两个分别指向前后 `runtime.sudog` 的指针以构成链表。
+
+**`struct{}` 类型的数据并不占空间，所以缓冲区并不用实际分配。**
+
 ### 2.1 向通道发送数据
 
 ```go
@@ -1154,10 +1253,93 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 ## 3. defer
 
+Go 语言的 `defer` 是一个很方便的机制，能够把某些函数调用推迟到当前函数返回前才实际执行。**我们可以很方便的用defer关闭一个打开的文件、释放一个Redis连接，或者解锁一个Mutex**。而且Go语言在设计上保证，即使发生panic，所有的defer调用也能够被执行。不过多个defer函数是按照定义顺序倒序执行的。
+
 `defer` 关键字的实现跟 `go` 关键字很类似，不同的是它调⽤的是 `runtime.deferproc` ⽽不是 `runtime.newproc`。
 在 `defer` 出现的地⽅，插⼊了指令 `call runtime.deferproc`，然后在函数返回之前的地⽅，插⼊指令 `call runtime.deferreturn`。
 goroutine 的控制结构中，有⼀张表记录 `defer`，调⽤ `runtime.deferproc` 时会将需要 `defer` 的表达式记录在表中，⽽在调⽤ `runtime.deferreturn` 的时候，则会依次从 `defer` 表中出栈并执⾏。
 因此，题⽬最后输出顺序应该是 `defer` 定义顺序的倒序。 `panic` 错误并不能终⽌ `defer` 的执⾏。
+
+```go
+type _defer struct {
+    siz       int32
+    started   bool
+    sp        uintptr // sp at time of defer
+    pc        uintptr
+    fn        *funcval
+    _panic    *_panic // panic that is running defer
+    link      *_defer
+
+    heap      bool       // 1.13 中新加 标识是否为堆分配
+
+    openDefer bool           //1
+}
+```
+
+`runtime._defer` 结构体是延迟调用链表上的一个元素，所有的结构体都会通过 `link` 字段串联成链表。
+
+- `siz` 是参数和结果的内存大小；
+- `sp` 和 `pc` 分别代表栈指针和调用方的程序计数器；
+- `fn` 是 `defer` 关键字中传入的函数；
+- `_panic` 是触发延迟调用的结构体，可能为空；
+- `openDefer` 表示当前 `defer` 是否经过开放编码的优化；
+
+### 版本演进
+
+- `defer1.12` 的性能问题主要缘于两个方面
+    1. `_defer` 结构体堆分配，即使有预分配的 `deferpool`，也需要去堆上获取与释放。而且 `defer` 函数的参数还要在注册时从栈拷贝到堆，执行时又要从堆拷贝到栈。
+    2. `defer` 信息保存到链表，而链表操作比较慢。
+
+- 1.13 版本中并不是所有 `defer` 都能够在栈上分配。循环中的 defer，无论是显示的 `for` 循环，还是 `goto` 形成的隐式循环，都只能使用 1.12版本中的处理方式在堆上分配。
+**即使只执行一次的 `for` 循环也是一样**。
+
+- Go1.14 通过增加一个标识变量 **`df`** 来解决这类问题。用 df 中的每一位对应标识当前函数中的一个 `defer` 函数是否要执行。
+函数A1要被执行，所以就通过 `df |= 1` 把 `df` 第一位置为 1；在函数返回前再通过 `df&1` 判断是否要调用函数 A1。
+Go1.14把 defer 函数在当前函数内展开并直接调用，这种方式被称为 open coded defer。这种方式不仅不用创建 `_defer` 结构体，也脱离了 `defer` 链表的束缚。不过这种方式依然不适用于循环中的 defer，所以1.12版本 defer 的处理方式是一直保留的。
+
+一旦发生 `panic` 或者调用了 `runtime.Goexit` 函数，在这之后的正常逻辑就都不会执行了，而是直接去执行 `defer` 链表。**那些使用open coded defer在函数内展开，因而没有被注册到链表的defer函数要通过栈扫描的方式来发现。**
+
+## panic & recover
+
+### 关键现象
+
+- `panic` 只会触发当前 Goroutine 的 `defer`
+- `recover` 只有在 `defer` 中调用才会生效
+`recover` 只有在发生 `panic` 之后调用才会生效，所以我们需要在 `defer` 中使用 `recover` 关键字。
+- `panic` 允许在 `defer` 中嵌套多次调用
+
+```go
+type _panic struct {
+    argp      unsafe.Pointer
+    arg       interface{}
+    link      *_panic
+    recovered bool
+    aborted   bool
+    pc        uintptr
+    sp        unsafe.Pointer
+    goexit    bool
+}
+```
+
+- argp 是指向 defer 调用时参数的指针；
+- arg 是调用 panic 时传入的参数；
+- link 指向了更早调用的 runtime._panic 结构；
+- recovered 表示当前 runtime._panic 是否被 recover 恢复；
+- aborted 表示当前的 panic 是否被强行终止；
+
+注意 panic 打印异常信息时，会打印此时 panic 链表中剩余的所有链表项。
+**不过，并不是从链表头开始，而是从链表尾开始，按照链表项的插入顺序逐一输出**。
+
+### 没有 recover 发生的 panic
+
+没有recover发生的panic处理逻辑就算梳理完了，理解这个过程的关键点有两个：
+
+1. panic 执行 defer 函数的方式，先标记，后移除，目的是为了终止之前工作的 panic；
+2. panic 异常信息：所有还在 panic 链表上的链表项都会被输出，顺序与 panic 发生的顺序一致。
+
+### revoce
+
+
 
 ## 4. 内存分配
 
@@ -1305,7 +1487,45 @@ Go 语言中对 GC 的触发时机存在两种形式：
 
 目前的 Go 实现中，当 GC 触发后，会首先进入并发标记的阶段。并发标记会设置一个标志，并在 mallocgc 调用时进行检查。当存在新的内存分配时，会暂停分配内存过快的那些 goroutine，并将其转去执行一些辅助标记（Mark Assist）的工作，从而达到放缓继续分配、辅助 GC 的标记工作的目的。
 
+### STW 的实现原理
+
+1. 根据 `gomaxprocs` 的值来设置 `stopwait`，实际上就是P的个数。
+2. 把 `gcwaiting` 置为1，并通过 preemptall 去抢占所有运行中的P。
+**preemptall会遍历allp这个切片，调用 `preemptone` 逐个抢占处于 _Prunning 状态的P**。
+接下来把当前M持有的P置为 `_Pgcstop` 状态，并把stopwait减去1，表示当前P已经被抢占了。
+3. **遍历allp**，把所有处于 `_Psyscall` 状态的P置为 `_Pgcstop` 状态，并把 `stopwait` 减去对应的数量。
+4. 再循环通过 `pidleget` 取得所有空闲的P，都置为 `_Pgcstop` 状态，从stopwait减去相应的数量。
+5. 最后通过判断 `stopwait` 是否大于0，也就是是否还有没被抢占的P，来确定是否需要等待。如果需要等待，就以100微秒为超时时间，在sched.stopnote上等待，超时后再次通过preemptall抢占所有P。
+因为preemptall不能保证一次就成功，所以需要循环。最后一个响应gcwaiting的工作线程在自我挂起之前，会通过stopnote唤醒当前线程，STW也就完成了。
+
+而所谓的**抢占**，就是把 g 的 `preempt` 字段设置成true，并把 `stackguard0` `这个栈增长检测的下界设置成stackPreempt`
+
+
+**1.13 通过栈增长检测代码实现goroutine抢占的原理。**
+执行fmt.Println的goroutine需要执行GC，进而发起了 `STW`。而main函数中的空 `for` 循环因为没有调用任何函数，所以没有机会执行栈增长检测代码，也就不能被抢占。
+
+1.14 实现了真正的抢占。
+实际的抢占操作是由 `preemptM` 函数完成的。
+`preemptM` 的主要逻辑，就是通过 `runtime.signalM` 函数向指定 M 发送 `sigPreempt` 信号。至于 `signalM` 函数，就是调用操作系统的信号相关系统调用，将指定信号发送给目标线程。至此，异步抢占工作的前一半就算完成了，信号已经发出去了。
+
+以下几个方面来保证在当前位置进行异步抢占是安全的：
+
+1. 可以挂起g并安全的扫描它的栈和寄存器，没有潜在的隐藏指针，而且当前并没有打断一个写屏障；
+2. g还有足够的栈空间来注入一个对asyncPreempt的调用；
+3. 可以安全的和runtime进行交互，例如未持有runtime相关的锁，因此在尝试获得锁时不会造成死锁。
+
 ## 3. GMP&调度器
+
+### 从代码执行入口到 main.main 发生了什么？
+
+程序入口是汇编实现的，主要任务是程序初始化，根据源码中的注释，程序启动的主要步骤如下：
+
+1. 调用 `osinit()` 获取CPU核数与内存页大小；
+2. 执行 `schedinit()` 初始化调度器，创建指定个数的 P，并建立 m0 与 P 的关联；
+3. 以 `runtime.main` 为执行入口创建goroutine，也就是 main goroutine；
+4. mstart 开启调度循环，此时等待队列里只有main goroutine等待执行；
+5. main goroutine得到调度，开始执行 runtime.main；
+6. runtime.main 会调用 main.main，开始执行我们编写的内容。main.main 返回后，会调用 exit 函数结束进程。
 
 ### 3.1 goroutine 与线程有什么区别？
 
@@ -1506,6 +1726,13 @@ Go 程序启动后，会给每个逻辑核心分配一个 `P`（Logical Processo
 `runtime.Gosched` 函数会主动让出处理器，允许其他 Goroutine 运行。该函数无法挂起 Goroutine，调度器可能会将当前 Goroutine 调度到其他线程上：
 
 经过连续几次跳转，我们最终在 `g0` 的栈上调用 `runtime.goschedImpl`，运行时会更新 Goroutine 的状态到 `_Grunnable`，让出当前的处理器并将 Goroutine 重新放回全局队列，在最后，该函数会调用 `runtime.schedule` 触发调度。
+
+### 抢占式调度
+
+现代操作系统调度线程都是抢占式的，我们不能依赖用户代码主动让出CPU，或者因为IO、锁等待而让出，这样会造成调度的不公平。
+**基于经典的时间片算法，当线程的时间片用完之后，会被时钟中断给打断，调度器会将当前线程的执行上下文进行保存，然后恢复下一个线程的上下文，分配新的时间片令其开始执**行。这种抢占对于线程本身是无感知的，系统底层支持，不需要开发人员特殊处理。
+
+基于时间片的抢占式调度有个明显的优点，**能够避免CPU资源持续被少数线程占用，从而使其他线程长时间处于饥饿状态**。
 
 ### 线程管理
 
