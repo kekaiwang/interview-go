@@ -150,7 +150,7 @@ write pos 和 checkpoint 之间的是 “粉板” 上还空着的部分，可�
 
 #### 重要的日志模块：binlog（server层）
 
-**redo log 和 binglog 的三点不同**：
+**redo log 和 binlog 的三点不同**：
 
 1. `redo log` 是 InnoDB 引擎特有的；`binlog` 是 MySQL 的 Server 层实现的，所有引擎都可以使用。
 2. `redo log` 是物理日志，记录的是“在某个数据页上做了什么修改”；`binlog` 是逻辑日志，记录的是这个语句的原始逻辑，比如“给 ID=2 这一行的 c 字段加 1 ”。
@@ -400,6 +400,11 @@ MySQL 为了让组提交的效果更好，把 redo log 做 fsync 的时间拖到
 
 事务就是要保证一组数据库操作，要么全部成功，要么全部失败。
 **在 MySQL 中，事务支持是在引擎层实现的**。
+
+A 通过 undo log 进行回滚操作
+C 一致性通过 undo log 回滚操作
+I 隔离性通过 MVCC 和锁
+D 持久化通过 redo log 实现
 
 #### 隔离性与隔离级别
 

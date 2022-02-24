@@ -10,6 +10,7 @@
 
 - **当 mid 是偶数时，`mid + 1 = mid ^ 1`**
 - **当 mid 是奇数时，`mid - 1 = mid ^ 1`**
+- **`x&1` 位运算 等价于 `x%2` 取余运算**
 
 ### 十大排序
 
@@ -331,5 +332,126 @@ func threeSum(nums []int) [][]int {
         }
     }
     return ans
+}
+```
+
+### 链表中倒数第K个节点 - 剑指 22
+
+输入一个链表，输出该链表中倒数第k个节点。为了符合大多数人的习惯，本题从1开始计数，即链表的尾节点是倒数第1个节点。
+
+例如，一个链表有 6 个节点，从头节点开始，它们的值依次是 1、2、3、4、5、6。
+这个链表的倒数第 3 个节点是值为 4 的节点。
+
+**解法：**
+
+使用双指针解决 定义 fast、slow 指向 head 头节点
+
+- 首先 fast 向后走 K 步，此时 fast 刚好指向第 k+1 个节点
+- 然后将 slow 指向头节点，同时 slow 和 fast 同步向后走，fast 指向链表结尾时，此时返回 slow 所指向的节点即可
+
+```go
+/**
+ * Definition for singly-linked list.
+ * type ListNode struct {
+ *     Val int
+ *     Next *ListNode
+ * }
+ */
+func getKthFromEnd(head *ListNode, k int) *ListNode {
+    fast, slow := head, head
+
+    // fast 不能为 nil 且 k > 0,当 k == 0 时此时指向的即为 k+1 个节点
+    for fast != nil && k > 0 {
+        fast = fast.Next
+        k--
+    }
+
+    for fast != nil {
+        fast = fast.Next
+        slow = slow.Next
+    }
+
+    return slow
+}
+```
+
+### 剑指 Offer 21. 调整数组顺序使奇数位于偶数前面
+
+输入一个整数数组，实现一个函数来调整该数组中数字的顺序，使得所有奇数在数组的前半部分，所有偶数在数组的后半部分。
+
+**解法：**
+
+使用双指针分别指向数组的左右两端，当 i，j 相遇时退出
+
+- 指针 l 遇到奇数进行 ++ 运算，直到找到 偶数
+- 指针 r 遇到偶数进行 ++ 运算，直到找到 奇数
+
+```go
+// [1,2,3,4]
+// 输出：[1,3,2,4] 或 [3,1,2,4] 都正确
+func exchange(nums []int) []int {
+    left, right := 0, len(nums)-1
+
+    for left < right {
+        // 遇到奇数进行左指针加一运算
+        for left < right && nums[left]&1 == 1 {
+            left++
+        }
+
+        // 遇到偶数进行右指针减一运算
+        for left < right && nums[right]&1 == 0 {
+            right--
+        }
+
+        // 不相交情况下进行交换
+        if left < right {
+            nums[left], nums[right] = nums[right], nums[left]
+        }
+    }
+
+    return nums
+}
+```
+
+### 剑指 Offer 18. 删除链表的节点
+
+给定单向链表的头指针和一个要删除的节点的值，定义一个函数删除该节点。
+
+返回删除后的链表的头节点。
+
+**解法：**
+
+```go
+/**
+ * Definition for singly-linked list.
+ * type ListNode struct {
+ *     Val int
+ *     Next *ListNode
+ * }
+ */
+func deleteNode(head *ListNode, val int) *ListNode {
+    // 如果节点为 nil 直接返回
+    if head == nil {
+        return nil
+    }
+
+    // 如果为头节点直接返回
+    if head.Val == val {
+        return head.Next
+    }
+
+    // 定义一个头节点，然后进行遍历查询
+    pre := head
+
+    for pre.Next != nil && pre.Next.Val != val {
+        pre = pre.Next
+    }
+
+    // 当指向的
+    if pre.Next != nil {
+        pre.Next = pre.Next.Next
+    }
+
+    return head
 }
 ```

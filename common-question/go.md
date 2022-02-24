@@ -246,6 +246,49 @@ go func() {
 1. 按照对源码的理解，可以得知在使用 `io.pipe()` 方法进行流式传输时
 2. gzip 压缩返回二进制数据
 
+### goroutine 和协程区别
+
+本质上，goroutine 就是协程。 **不同的是，Golang 在 runtime、系统调用等多方面对 goroutine 调度进行了封装和处理，当遇到长时间执行或者进行系统调用时，会主动把当前 goroutine 的CPU (P) 转让出去，让其他 goroutine 能被调度并执行，也就是 Golang 从语言层面支持了协程**。
+Golang 的一大特色就是从语言层面原生支持协程，在函数或者方法前面加 go关键字就可创建一个协程。
+
+其他方面的比较
+
+1. 内存消耗方面
+    - 每个 goroutine (协程) 默认占用内存远比 Java 、C 的线程少。
+    - goroutine：2KB
+    - 线程：8MB
+
+2. 线程和 goroutine 切换调度开销方面
+    - 线程/goroutine 切换开销方面，goroutine 远比线程小
+    - 线程：涉及模式切换(从用户态切换到内核态)、16个寄存器、PC、SP...等寄存器的刷新等。
+    - goroutine：只有三个寄存器的值修改 - PC / SP / DX.
+
+pc：也就是 x86 下的ip 指令寄存器
+SP：栈指针寄存器
+
+### gopark 挂起的过程
+
+park_m:
+
+- gopark通过mcall将当前线程的堆栈切换到g0的堆栈
+- 保存当前goroutine的上下文（pc、sp寄存器->g.sched）
+- 在g0栈上，调用park_m
+- 将当前的g从running状态设置成waiting状态
+- 通过dropg来解除m和g的关系
+
+### 并发安全的类型
+
+- 由一条机器指令完成赋值的类型并发赋值是安全的，这些类型有：**字节型，布尔型、整型、浮点型、字符型、指针、函数**
+- 数组由一个或多个元素组成，大部分情况并发不安全。注意：当位宽不大于 64 位且是 2 的整数次幂（8，16，32，64），那么其并发赋值是安全的
+- struct 或底层是 struct 的类型并发赋值大部分情况并发不安全，这些类型有：**复数、字符串、 数组、切片、映射、通道、接口**。
+注意：当 struct 赋值时退化为单个字段由一个机器指令完成赋值时，并发赋值又是安全的
+
+    ```go
+    // 此时可以实现结构体的并发安全
+    var v atomic.Value
+    v.Store(Test{1,2})
+    ```
+
 ## 类型系统
 
 **Go语言中每种类型都有对应的类型元数据，类型元数据都有一个相同的Header，就是 `runtime._type`**。
@@ -1038,6 +1081,12 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 **除了将当前 Goroutine 对应的 `runtime.sudog` 结构体加入队列之外，这些结构体都会被串成链表附着在 Goroutine 上。在入队之后会调用 `runtime.gopark` 挂起当前 Goroutine 等待调度器的唤醒。**
 
 ## 2. 同步原语&互斥锁
+
+### atomic 与 sync
+
+**atomic 包的原子操作是通过 CPU 指令，也就是在硬件层次去实现的，性能较好**，不需要像 mutex 那样记录很多状态。
+
+**atomic的add操作（硬件层面的原子操作），同一时间点只让一个cpu不可中断的执行这些指令．**
 
 ### 2.1 mutex
 
