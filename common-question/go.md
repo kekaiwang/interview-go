@@ -289,6 +289,28 @@ park_m:
     v.Store(Test{1,2})
     ```
 
+### 产生 panic 的情况
+
+1. slice 访问越界
+2. 重复关闭 chnnel 、关闭 nil 的 channel、向已关闭的 channel 发送数据
+3. 死锁产生的 panic
+4. map 并发读写产生 panic
+5. 类型断言不捕获 bool 类型产生 panic
+6. 空指针的属性访问产生 panic
+
+## string
+
+字符串拼接最好使用下面缓冲的形式拼接
+
+```go
+var buffer bytes.Buffer
+
+for i := 0; i < 500; i++ {
+    buffer.WriteString("hello,world")
+}
+fmt.Println(buffer.String())
+```
+
 ## 类型系统
 
 **Go语言中每种类型都有对应的类型元数据，类型元数据都有一个相同的Header，就是 `runtime._type`**。
@@ -318,7 +340,7 @@ type method struct {
 
 - `type U int32` 基于 `int` 定义的新类型，有属于自己的类型元数据。
 - `type U2 = int32` 是 `int32` 的别名，等价于 int；U2 和 `int32` 会关联到同一个类型元数据属于同一种类型。
-**`rune` 和 `int32` 就是这样的关系**。
+**`rune` 和 `int32` 就是这样的关系**、`byte` 和 `uint8`。
 
 下面所示非空接口 `r` 的静态类型是 `io.Reader`，动态类型是 `*os.File`。
 
@@ -401,6 +423,14 @@ type itab struct {
 Go 语言数组在初始化之后大小就无法改变，存储元素类型相同、但是大小不同的数组类型在 Go 语言看来也是完全不同的，只有两个条件都相同才是同一类型。
 
 ## slice
+
+```go
+s2 := s1[2:6:7]
+```
+
+s2 从 s1 的索引2（闭区间）到索引6（开区间，元素真正取到索引5），容量到索引7（开区间，真正到索引6），为5。
+
+### append
 
 - append函数返回的是一个切片，append在原切片的末尾添加新元素，这个末尾是切片长度的末尾，不是切片容量的末尾。
 
