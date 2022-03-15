@@ -5,6 +5,12 @@ GoLang/PHP 面试整理
 
 ## ~~现就职于轻松筹，如有需要可内推跟进流程~~
 
+开始一次重学时间，完成一次深入和详细的学习过程
+
+## re-learning
+
+- [Go]([https://](https://github.com/kekaiwang/interview-go/blob/main/re-learning/go/re-go.md))
+
 ## 语言类
 
 - [PHP](https://github.com/kekaiwang/interview-go/blob/main/doc/php.md)
