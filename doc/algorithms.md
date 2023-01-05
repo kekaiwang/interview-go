@@ -464,3 +464,179 @@ func deleteNode(head *ListNode, val int) *ListNode {
     return head
 }
 ```
+
+### 反转链表
+
+定义一个函数，输入一个链表的头节点，反转该链表并输出反转后链表的头节点。
+
+示例:
+
+```text
+输入: 1->2->3->4->5->NULL
+输出: 5->4->3->2->1->NULL
+```
+
+**解法：**
+
+```go
+/**
+ * Definition for singly-linked list.
+ * type ListNode struct {
+ *     Val int
+ *     Next *ListNode
+ * }
+ */
+func reverseList(head *ListNode) *ListNode {
+    var pre *ListNode
+    cur, nxt := head, head
+
+    for cur != nil {
+        // 获取当前节点的下一个节点
+        nxt = cur.Next
+        // 当前节点的下一个指针指向上一个节点，第一次为 nil
+        // 也就是反向指
+        cur.Next = pre
+        // 将 cur 复制给 pre
+        pre = cur
+        // 将 cur 向后走，也就是走到下一个节点
+        cur = nxt
+    }
+
+    return pre
+}
+```
+
+### 回文链表
+
+给定一个链表的 头节点 head ，请判断其是否为回文链表。
+
+如果一个链表是回文，那么链表节点序列从前往后看和从后往前看是相同的。
+
+```text
+输入: head = [1,2,3,3,2,1]
+输出: true
+```
+
+**解法：**
+
+```go
+/**
+ * Definition for singly-linked list.
+ * type ListNode struct {
+ *     Val int
+ *     Next *ListNode
+ * }
+ */
+func isPalindrome(head *ListNode) bool {
+    // 1. find middle
+    slow, fast := head, head
+    for fast != nil && fast.Next != nil {
+        slow = slow.Next
+        fast = fast.Next.Next
+    }
+
+    // 2. 偶数时此时 fast 位于倒数第二位置
+    if fast != nil {
+        slow = slow.Next
+    }
+
+    // 3. 反转后半部分
+    right := traverse(slow)
+    left := head
+
+    for right != nil {
+        if right.Val != left.Val {
+            return false
+        }
+        right = right.Next
+        left = left.Next
+    }
+
+    return true
+}
+
+func traverse(head *ListNode) *ListNode {
+    var pre *ListNode
+    cur, nxt := head, head
+
+    for cur != nil {
+        nxt = cur.Next
+        cur.Next = pre
+        pre = cur
+        cur = nxt
+    }
+
+    return pre
+}
+
+// var left *ListNode
+// func isPalindrome(head *ListNode) bool {
+//     left = head
+//     return traverse(head)
+// }
+
+// func traverse(right *ListNode) bool {
+//     if right == nil {
+//         return true
+//     }
+
+//     res := traverse(right.Next)
+
+//     if res && right.Val == left.Val {
+//         res = true
+//     } else {
+//         res = false
+//     }
+
+//     left = left.Next
+
+//     return res
+// }
+```
+
+### 116. 二叉树展开为链表
+
+给你二叉树的根结点 root ，请你将它展开为一个单链表：
+
+展开后的单链表应该同样使用 TreeNode ，其中 right 子指针指向链表中下一个结点，而左子指针始终为 null 。
+展开后的单链表应该与二叉树 先序遍历 顺序相同。
+
+```text
+输入：root = [1,2,5,3,4,null,6]
+输出：[1,null,2,null,3,null,4,null,5,null,6]
+```
+
+**解法：**
+
+```go
+/**
+ * Definition for a binary tree node.
+ * type TreeNode struct {
+ *     Val int
+ *     Left *TreeNode
+ *     Right *TreeNode
+ * }
+ */
+func flatten(root *TreeNode)  {
+    if root == nil {
+        return
+    }
+
+    flatten(root.Left)
+    flatten(root.Right)
+
+    left := root.Left
+    right := root.Right
+
+    root.Left = nil
+    root.Right = left
+
+    p := root
+    for p.Right != nil {
+        p = p.Right
+    }
+    p.Right = right
+
+    return
+}
+```
