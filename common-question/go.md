@@ -106,16 +106,16 @@
 
 - **文档规范**，gRPC使用proto文件编写接口（API），文档规范比Restful更好，因为proto文件的语法和形式是定死的，所以更为严谨、风格统一清晰；而Restful由于可以使用多种工具进行编写（只要人看得懂就行），每家公司、每个人的攥写风格又各有差异，难免让人觉得比较混乱。
 
-- **消息编码**，消息编码这块，gRPC使用protobuf进行消息编码，而Restful一般使用JSON进行编码
+- **消息编码**，消息编码这块，gRPC 使用 `protobuf` 进行消息编码，而 `Restful` 一般使用 `JSON` 进行编码
 
-- **传输协议**，gRPC使用HTTP/2作为底层传输协议，而RestFul则使用 HTTP 或则其他协议 https/tcp等。
+- **传输协议**，gRPC 使用 `HTTP/2` 作为底层传输协议，而 RestFul 则使用 HTTP 或则其他协议 `https/tcp` 等。
 
 - **传输性能**，由于 gRPC 使用 protobuf 进行消息编码（即序列化），而经 protobuf 序列化后的消息体积很小（传输内容少，传输相对就快）；再加上HTTP/2协议的加持（HTTP1.1的进一步优化），使得gRPC的传输性能要优于Restful。
 
-- **传输形式**，gRPC最大的优势就是支持流式传输，传输形式具体可以分为四种（unary、client stream、server stream、bidirectional stream），这个后面我们会讲到；而Restful是不支持流式传输的。
+- **传输形式**，gRPC 最大的优势就是支持流式传输，传输形式具体可以分为四种（unary、client stream、server stream、bidirectional stream），这个后面我们会讲到；而 Restful 是不支持流式传输的。
 
-- 浏览器的支持度
-不知道是不是gRPC发展较晚的原因，目前浏览器对gRPC的支持度并不是很好，而对Restful的支持可谓是密不可分，这也是gRPC的一个劣势，
+- **浏览器的支持度**
+目前浏览器对gRPC的支持度并不是很好，而对 Restful 的支持可谓是密不可分，这也是 gRPC 的一个劣势，
 
 - **消息的可读性和安全性**，由于gRPC序列化的数据是二进制，且如果你不知道定义的Request和Response是什么，你几乎是没办法解密的，所以gRPC的安全性也非常高，但随着带来的就是可读性的降低，调试会比较麻烦；而Restful则相反（现在有HTTPS，安全性其实也很高）
 
@@ -123,12 +123,12 @@
 
 总的来说：
 
-1. **gRPC主要用于公司内部的服务调用，性能消耗低，传输效率高，服务治理方便。**
-2. **Restful主要用于对外，比如提供接口给前端调用，提供外部服务给其他人调用等，**
+1. **gRPC 主要用于公司内部的服务调用，性能消耗低，传输效率高，服务治理方便。**
+2. **Restful 主要用于对外，比如提供接口给前端调用，提供外部服务给其他人调用等，**
 
 ### 1.8 go 内存泄漏
 
-go 中的内存泄露一般都是 goroutine 泄露，就是 goroutine 没有被关闭，或者没有添加超时控制，让goroutine一只处于阻塞状态，不能被 `GC`。
+**go 中的内存泄露一般都是 `goroutine` 泄露，就是 `goroutine` 没有被关闭，或者没有添加超时控制，让 `goroutine` 一只处于阻塞状态，不能被 `GC`**。
 
 #### 1. 暂时性内存泄露
 
@@ -170,9 +170,9 @@ r, e = syscall.Open(name, flag|syscall.O_CLOEXEC, syscallMode(perm))
 ```
 
 第一个参数是文件名，第二个参数是文件模式，第三个参数是文件权限，默认权限是0666
-O_RDWR O_CREATE O_TRUNC是file.go文件中定义好的一些常量，标识文件以什么模式打开，常见的模式有读写，只写，只读，权限依次降低。
+`O_RDWR、O_CREATE、O_TRUNC` 是file.go文件中定义好的一些常量，标识文件以什么模式打开，常见的模式有读写，只写，只读，权限依次降低。
 
-看到syscall对于文件的操作进行了封装，继续进入
+看到 syscall 对于文件的操作进行了封装，继续进入
 
 ```go
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
@@ -192,9 +192,9 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 
     无论我们传递给函数的整数值是什么值，运行时系统的P最大值总会在1~256之间。
 
-3. `Gosched`:让当前线程让出 cpu 以让其它线程运行,它不会挂起当前线程，因此当前线程未来会继续执行  
+3. `Gosched`: 让当前线程让出 cpu 以让其它线程运行,它不会挂起当前线程，因此当前线程未来会继续执行  
     这个函数的作用是让当前 goroutine 让出 CPU，当一个 goroutine 发生阻塞，Go 会自动地把与该 goroutine 处于同一系统线程的其他 goroutine 转移到另一个系统线程上去，以使这些 goroutine 不阻塞。
-4. `Goexit`: 退出当前 goroutine(但是defer语句会照常执行)
+4. `Goexit`: 退出当前 goroutine(但是 `defer` 语句会照常执行)
 5. `NumGoroutine`: 返回正在执行和排队的任务总数  
   runtime.NumGoroutine 函数在被调用后，会返回系统中的处于特定状态的 Goroutine 的数量。这里的特指是指 Grunnable\Gruning\Gsyscall\Gwaition。处于这些状态的 Groutine 即被看做是活跃的或者说正在被调度。
 注意：垃圾回收所在 Groutine 的状态也处于这个范围内的话，也会被纳入该计数器。
@@ -208,6 +208,7 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 
 **值类型分别有**：int系列、float系列、bool、string、数组和结构体
 **引用类型有**：指针、slice切片、管道channel、接口interface、map、函数等
+
 值类型的特点是：变量直接存储值，内存通常在栈中分配
 引用类型的特点是：变量存储的是一个地址，这个地址对应的空间里才是真正存储的值，内存通常在堆中分配
 
@@ -263,7 +264,7 @@ Golang 的一大特色就是从语言层面原生支持协程，在函数或者�
     - 线程：涉及模式切换(从用户态切换到内核态)、16个寄存器、PC、SP...等寄存器的刷新等。
     - goroutine：只有三个寄存器的值修改 - PC / SP / DX.
 
-pc：也就是 x86 下的ip 指令寄存器
+pc：也就是 x86 下的 ip 指令寄存器
 SP：栈指针寄存器
 
 ### gopark 挂起的过程
@@ -650,7 +651,7 @@ a = append(a, "kevin")
 ## map
 
 - **删除 map 不存在的键值对时，不会报错，相当于没有任何作用**
-- **获取不存在的减值对时，返回值类型对应的零值，所以返回 0**
+- **获取不存在的键值对时，返回值类型对应的零值，所以返回 0**
 
 ### map 结构 hmap
 
