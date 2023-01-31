@@ -250,7 +250,7 @@ go func() {
 ### goroutine 和协程区别
 
 本质上，goroutine 就是协程。 **不同的是，Golang 在 runtime、系统调用等多方面对 goroutine 调度进行了封装和处理，当遇到长时间执行或者进行系统调用时，会主动把当前 goroutine 的CPU (P) 转让出去，让其他 goroutine 能被调度并执行，也就是 Golang 从语言层面支持了协程**。
-Golang 的一大特色就是从语言层面原生支持协程，在函数或者方法前面加 go关键字就可创建一个协程。
+Golang 的一大特色就是从语言层面原生支持协程，在函数或者方法前面加 go 关键字就可创建一个协程。
 
 其他方面的比较
 
@@ -271,11 +271,11 @@ SP：栈指针寄存器
 
 park_m:
 
-- gopark通过mcall将当前线程的堆栈切换到g0的堆栈
-- 保存当前goroutine的上下文（pc、sp寄存器->g.sched）
-- 在g0栈上，调用park_m
-- 将当前的g从running状态设置成waiting状态
-- 通过dropg来解除m和g的关系
+- gopark 通过 mcall 将当前线程的堆栈切换到 g0 的堆栈
+- 保存当前 goroutine 的上下文（pc、sp寄存器->g.sched）
+- 在 g0 栈上，调用 park_m
+- 将当前的 g 从 running 状态设置成 waiting 状态
+- 通过 dropg 来解除 m 和 g 的关系
 
 ### 并发安全的类型
 
@@ -321,7 +321,7 @@ fmt.Println(buffer.String())
 
 ### 类型元数据
 
-类型元数据：内置类型和自定义类型的类型描述信息，每种类型元数据都是全剧唯一的。这些类型元数据构成了 Go 语言的 “类型系统”。
+类型元数据：内置类型和自定义类型的类型描述信息，每种类型元数据都是全局唯一的。这些类型元数据构成了 Go 语言的 “类型系统”。
 
 `runtime._type` 包含数据的基本 `header` 信息，后面跟随其他描述信息，比如 `slice` 类型的类型元数据等，**如果是自定义类型后面还跟随 `uncommontype` 结构体**。
 
@@ -341,7 +341,7 @@ type method struct {
 
 - `type U int32` 基于 `int` 定义的新类型，有属于自己的类型元数据。
 - `type U2 = int32` 是 `int32` 的别名，等价于 int；U2 和 `int32` 会关联到同一个类型元数据属于同一种类型。
-**`rune` 和 `int32` 就是这样的关系**、`byte` 和 `uint8`。
+**`rune` 和 `int32`、`byte` 和 `uint8` 就是这样的关系**。
 
 下面所示非空接口 `r` 的静态类型是 `io.Reader`，动态类型是 `*os.File`。
 
@@ -394,11 +394,11 @@ var _ io.Writer = myWriter{}
 
 ```go
 type itab struct {
-  inter *interfacetype
-  _type *_type
-  hash  uint32
-  _     [4]byte
-  fun   [1]uintptr
+    inter *interfacetype
+    _type *_type
+    hash  uint32
+    _     [4]byte
+    fun   [1]uintptr
 }
 ```
 
@@ -610,7 +610,7 @@ arr = append(arr, 3, 4, 5)
 
 在分配内存空间之前需要先确定新的切片容量，运行时根据切片的当前容量选择不同的策略进行扩容：
 
-1. 如果期望容量大于当前容量的两倍就会使用期望容量
+1. 如果期望容量大于当前容量的两倍就会使用期望容量（也就是当前容量翻倍）
 2. 如果当前切片的长度小于 1024 就会将容量翻倍
 3. 如果当前切片的长度大于 1024 就会每次增加 25% 的容量，直到新容量大于期望容量
 
