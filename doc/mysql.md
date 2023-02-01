@@ -320,11 +320,11 @@ binlog 的写入逻辑比较简单：事务执行过程中，先把日志写到 
 
 - **一种是，redo log buffer 占用的空间即将达到 innodb_log_buffer_size 一半的时候，后台线程会主动写盘**。注意，由于这个事务并没有提交，所以这个写盘动作只是 write，而没有调用 fsync，也就是只留在了文件系统的 page cache。
 
-- **另一种是，并行的事务提交的时候，顺带将这个事务的 redo log buffer 持久化到磁盘**。假设一个事务 A 执行到一半，已经写了一些 redo log 到 buffer 中，这时候有另外一个线程的事务 B 提交，如果 innodb_flush_log_at_trx_commit 设置的是 1，那么按照这个参数的逻辑，事务 B 要把 redo log buffer 里的日志全部持久化到磁盘。这时候，就会带上事务 A 在 redo log buffer 里的日志一起持久化到磁盘。
+- **另一种是，并行的事务提交的时候，顺带将这个事务的 redo log buffer 持久化到磁盘**。假设一个事务 A 执行到一半，已经写了一些 redo log 到 buffer 中，这时候有另外一个线程的事务 B 提交，如果 `innodb_flush_log_at_trx_commit` 设置的是 1，那么按照这个参数的逻辑，事务 B 要把 redo log buffer 里的日志全部持久化到磁盘。这时候，就会带上事务 A 在 redo log buffer 里的日志一起持久化到磁盘。
 
-> _两阶段提交时序上 redo log 先 prepare， 再写 binlog，最后再把 redo log commit_。
+> 两阶段提交时序上 redo log 先 prepare， 再写 binlog，最后再把 redo log commit_。
 
-如果把 innodb_flush_log_at_trx_commit 设置成 1，那么 redo log 在 prepare 阶段就要持久化一次，**因为有一个崩溃恢复逻辑是要依赖于 prepare 的 redo log**，再加上 binlog 来恢复的。
+如果把 `innodb_flush_log_at_trx_commit` 设置成 1，那么 redo log 在 prepare 阶段就要持久化一次，**因为有一个崩溃恢复逻辑是要依赖于 prepare 的 redo log**，再加上 binlog 来恢复的。
 
 每秒一次后台轮询刷盘，再加上崩溃恢复这个逻辑，InnoDB 就认为 redo log 在 commit 的时候就不需要 fsync 了，只会 write 到文件系统的 page cache 中就够了。
 
@@ -592,7 +592,7 @@ _读提交的逻辑和可重复读的逻辑类似，它们最主要的区别是�
 
 ![image](https://mail.wangkekai.cn/EF8CA188-2EE3-44E0-AF1E-6A6F4DA8A630.png)
 
-事务 A 的查询语句的视图数组是在执行这个语句的时候创建的，时序上 (1,2)、(1,3) 的生成时间都在创建这个视图数组的时刻之前。但是，在这个时刻：
+事务 A 的查询语句的视图数组是在执行这个语句的时候创建的，时序上 (1,2)、(1,3) 的生成时间都在创建这个视图数组的时刻之前。但是，在这个时刻：(此时是读提交隔离级别)
 
 - (1,3) 还没提交，属于情况 1，不可见；
 - (1,2) 提交了，属于情况 3，可见。

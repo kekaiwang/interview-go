@@ -1073,7 +1073,7 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 
 `runtime.selectgo` 函数首先会进行执行必要的初始化操作并决定处理 `case` 的两个顺序 — **轮询顺序 `pollOrder` 和加锁顺序 `lockOrder`**：
 
-- **轮询顺序**：**通过 `runtime.fastrandn` 函数引入随机性**；
+- **轮询顺序**：**通过 `runtime.fastrand` 函数引入随机性**；
 - **加锁顺序**：按照 `Channel` 的地址排序后确定加锁顺序；
 
 **随机的轮询顺序可以避免 Channel 的饥饿问题，保证公平性；而根据 Channel 的地址顺序确定加锁顺序能够避免死锁的发生**。这段代码最后调用的 `runtime.sellock` 会按照之前生成的加锁顺序锁定 `select` 语句中包含所有的 Channel。
