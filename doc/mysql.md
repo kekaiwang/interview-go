@@ -1994,6 +1994,13 @@ select * from trade_detail  where CONVERT(traideid USING utf8mb4)=$L2.tradeid.va
 
 第二个例子是隐式类型转换，第三个例子是隐式字符编码转换
 
+```mysql
+mysql> select d.* from tradelog l , trade_detail d where d.tradeid=CONVERT(l.tradeid USING utf8) and l.id=2;
+```
+
+类似上面这种 tradelog 字符集为 utf8mb4，trade_detail 为 utf8, 这种时候优化器会先查询 tradelog 的 id=2 的记录然后再使用 join 两表进行查询，也就是主动将 l.tradeid 转成了 utf8, 避免了被驱动表上的字符编码转换就可以正常使用索引了。
+**在实际开发中如果碰到大表无法直接修改表字符集可以尝试通过将字符转换的步骤加到被驱动表上**
+
 ## 11 | MySQL有哪些临时提高性能的方法？
 
 ### 短连接风暴
