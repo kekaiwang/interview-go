@@ -2014,9 +2014,9 @@ mysql> select d.* from tradelog l , trade_detail d where d.tradeid=CONVERT(l.tra
 
 > max_connections 的计算，不是看谁在 running，是只要连着就占用一个计数位置。设置 `wait_timeout` 参数表示的是，一个线程空闲 `wait_timeout` 这么多秒之后，就会被 MySQL 直接断开连接。
 
-show processlist 查看两个会话都是 Sleep 状态。要看事务具体状态的话，你可以查 information_schema 库的 innodb_trx 表。
+`show processlist` 查看两个会话都是 `Sleep` 状态。要看事务具体状态的话，你可以查 information_schema 库的 innodb_trx 表。
 
-从服务端断开连接使用的是 kill connection + id 的命令， 一个客户端处于 sleep 状态时，它的连接被服务端主动断开后，这个客户端并不会马上知道。直到客户端在发起下一个请求的时候，才会收到这样的报错“ERROR 2013 (HY000): Lost connection to MySQL server during query”。
+从服务端断开连接使用的是 `kill connection + id` 的命令， 一个客户端处于 sleep 状态时，它的连接被服务端主动断开后，这个客户端并不会马上知道。直到客户端在发起下一个请求的时候，才会收到这样的报错 `ERROR 2013 (HY000): Lost connection to MySQL server during query`。
 
 **从数据库端主动断开连接可能是有损的，尤其是有的应用端收到这个错误后，不重新连接，而是直接用这个已经不能用的句柄重试查询**。这会导致从应用端看上去，“MySQL 一直没恢复”。
 
@@ -2331,7 +2331,7 @@ mysqlbinlog master.000001  --start-position=2738 --stop-position=2973 | mysql -h
 
 > 先思考一个问题：事务能不能按照轮询的方式分发给各个 worker，也就是第一个事务分给 worker_1，第二个事务发给 worker_2 呢？
 
-其实是不行的。因为，事务被分发给 worker 以后，不同的 worker 就独立执行了。但是，由于 CPU 的调度策略，_很可能第二个事务最终比第一个事务先执行_。而如果这时候刚好这两个事务更新的是同一行，也就意味着，同一行上的两个事务，在主库和备库上的执行顺序相反，会导致主备不一致的问题。
+其实是不行的。因为，事务被分发给 worker 以后，不同的 worker 就独立执行了。但是，由于 CPU 的调度策略，*很可能第二个事务最终比第一个事务先执行*。而如果这时候刚好这两个事务更新的是同一行，也就意味着，同一行上的两个事务，在主库和备库上的执行顺序相反，会导致主备不一致的问题。
 
 > 另外一个问题：同一个事务的多个更新语句，能不能分给不同的 worker 来执行呢？
 
