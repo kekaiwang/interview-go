@@ -175,9 +175,7 @@ top10 热点新闻并不是实时更新的，**可以接受一点延迟，可以
 
 我们将用户信息结构体使用 JSON 序列化成字符串，然后将序列化后的字符串塞进 Redis 来缓存。同样，取用户信息会经过一次反序列化的过程。
 
-![image](https://mail.wangkekai.cn/D1DA79F5-652B-4DD4-B665-A4A4616176D6.png)
-
-Redis 的字符串是动态字符串，是可以修改的字符串，内部结构实现上类似于 Java 的 `ArrayList`，采用预分配冗余空间的方式来减少内存的频繁分配，*内部为当前字符串实际分配的空间 `capacity` 一般要高于实际字符串长度 len*。  
+**Redis 的字符串是动态字符串，是可以修改的字符串**，内部结构实现上类似于 Java 的 `ArrayList`，采用预分配冗余空间的方式来减少内存的频繁分配，*内部为当前字符串实际分配的空间 `capacity` 一般要高于实际字符串长度 `len`*。  
 
 ```shell
 # 键值对缓存
@@ -250,7 +248,8 @@ struct SDS<T> {
 
 ![image](https://mail.wangkekai.cn/D1DA79F5-652B-4DD4-B665-A4A4616176D6.png)
 
-`capacity` **表示所分配数组的长度**`，len` **表示字符串的实际长度**。前面我们提到字符串是可以修改的字符串，它要支持 append 操作。如果数组没有冗余空间，那么追加操作必然涉及到分配新数组，然后将旧内容复制过来，再 append 新内容。如果字符串的长度非常长，这样的内存分配和复制开销就会非常大。
+`content` 里面存储了真正的字符串内容，`capacity` **表示所分配数组的长度**`，len` **表示字符串的实际长度**。
+前面我们提到字符串是可以修改的字符串，它要支持 append 操作。如果数组没有冗余空间，那么追加操作必然涉及到分配新数组，然后将旧内容复制过来，再 append 新内容。如果字符串的长度非常长，这样的内存分配和复制开销就会非常大。
 
 上面的 `SDS` 结构使用了范型 T，为什么不直接用 int 呢，这是因为当字符串比较短时，len 和 capacity 可以使用 `byte` 和 `short` 来表示，Redis 为了对内存做极致的优化，**不同长度的字符串使用不同的结构体来表示**。
 
@@ -472,9 +471,10 @@ struct entry {
 
 如果 ziplist 里面每个 entry 恰好都存储了 253 字节的内容，那么第一个 entry 内容的修改就会导致后续所有 entry 的级联更新，这就是一个比较耗费计算资源的操作。
 
-##### IntSet 小整数集合
+#### IntSet 小整数集合
 
-当 set 集合容纳的元素都是整数并且元素个数较小时，Redis 会使用 `intset` 来存储结合元素。intset 是紧凑的数组结构，同时支持 16 位、32 位和 64 位整数。
+**当 set 集合容纳的元素都是整数并且元素个数较小时，Redis 会使用 `intset` 来存储结合元素**。
+`intset` 是紧凑的数组结构，同时支持 16 位、32 位和 64 位整数。
 
 ```c++
 struct intset<T> {
@@ -495,7 +495,8 @@ Value at:0x7fec2dc2bde0 refcount:1 encoding:intset serializedlength:15 lru:60657
 Value at:0x7fec2dc2bde0 refcount:1 encoding:hashtable serializedlength:22 lru:6065810 lru_seconds_idle:5
 ```
 
-注意观察 debug object 的输出字段 encoding 的值，可以发现**当 set 里面放进去了非整数值时，存储形式立即从 intset 转变成了 hash 结构**
+注意观察 debug object 的输出字段 encoding 的值
+**当 `set` 里面放进去了非整数值时，存储形式立即从 `intset` 转变成了 `hash` 结构**
 
 ## 3. hash - 字典
 
