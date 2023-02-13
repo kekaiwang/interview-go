@@ -10,17 +10,17 @@
 
 ```go
 type hchan struct {
-	qcount   uint           // channel 中元素个数
-	dataqsiz uint           // channel 中循环队列的长度
-	buf      unsafe.Pointer // 缓冲区，也称为环形数组
-	elemsize uint16         // 数据类型大小
-	closed   uint32         // 是否关闭
-	elemtype *_type         // 数据类型
-	sendx    uint           // 发送操作处理到的位置
-	recvx    uint           // 接收操作处理到的位置
-	recvq    waitq          // 接收的阻塞队列
-	sendq    waitq          // 发送的阻塞队列
+ qcount   uint           // channel 中元素个数
+ dataqsiz uint           // channel 中循环队列的长度
+ buf      unsafe.Pointer // 缓冲区，也称为环形数组
+ elemsize uint16         // 数据类型大小
+ closed   uint32         // 是否关闭
+ elemtype *_type         // 数据类型
+ sendx    uint           // 发送操作处理到的位置
+ recvx    uint           // 接收操作处理到的位置
+ recvq    waitq          // 接收的阻塞队列
+ sendq    waitq          // 发送的阻塞队列
 
-	lock mutex
+ lock mutex
 }
 ```
