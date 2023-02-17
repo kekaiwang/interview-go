@@ -419,6 +419,10 @@ type itab struct {
 （1）无论是嵌入值还是嵌入指针，值接收者方法始终能够被继承；
 （2）只有在能够拿到嵌入对象的地址时，才能继承指针接收者方法。
 
+### 动态类型和动态值
+
+接口值的零值是指`动态类型`和`动态值`都为 `nil`。当仅且当这两部分的值都为 `nil` 的情况下，这个接口值就才会被认为 `接口值 == nil`。
+
 ## 数组
 
 Go 语言数组在初始化之后大小就无法改变，存储元素类型相同、但是大小不同的数组类型在 Go 语言看来也是完全不同的，只有两个条件都相同才是同一类型。
@@ -659,7 +663,7 @@ a = append(a, "kevin")
 
 ```go
 type hmap struct {
-    count     int    //已经存储的键值对个数
+    count     int    // 已经存储的键值对个数
     flags     uint8
     B         uint8  // 常规桶个数等于2^B; map底层的哈希表通过与运算的方式选择桶
     noverflow uint16 // 使用的溢出桶数量
@@ -673,9 +677,9 @@ type hmap struct {
 
 // 溢出桶相关信息
 type mapextra struct {
-    overflow    *[]*bmap //把已经用到的溢出桶链起来
-    oldoverflow *[]*bmap //渐进式扩容时，保存旧桶用到的溢出桶
-    nextOverflow *bmap   //下一个尚未使用的溢出桶
+    overflow    *[]*bmap // 把已经用到的溢出桶链起来
+    oldoverflow *[]*bmap // 渐进式扩容时，保存旧桶用到的溢出桶
+    nextOverflow *bmap   // 下一个尚未使用的溢出桶
 }
 ```
 
@@ -688,7 +692,7 @@ type mapextra struct {
 
 map使用的桶很有设计感，每个桶里可以存储8个键值对，并且为了内存使用更加紧凑，**8个键放一起，8个值放一起**。
 **对应每个key只保存其哈希值的高8位（`tophash`）**。
-**每个键值对的tophash、key和value的索引顺序一一对应**。这就是map使用的桶的内存布局。
+**每个键值对的 tophash、key 和 value 的索引顺序一一对应**。这就是 map 使用的桶的内存布局。
 
 ```go
 type bmap struct {
