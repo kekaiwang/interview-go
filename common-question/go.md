@@ -46,6 +46,15 @@
 - 未初始化的全局变量或静态变量，会被分配在 BSS 段。
 - 在函数中定义的局部变量，会被分配在堆（Heap 段）或栈（Stack 段）
 
+#### string for range
+
+```go
+    s := "ABC"
+    for i, v := range s {
+        fmt.Println(i, v) // 0 41 // 1 42 // 2 43
+    }
+```
+
 ### 1.2 提高性能的写法
 
 1. 可以使用 CAS，则使用 CAS 操作
