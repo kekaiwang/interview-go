@@ -349,7 +349,7 @@ type method struct {
 ```
 
 - `type U int32` 基于 `int` 定义的新类型，有属于自己的类型元数据。
-- `type U2 = int32` 是 `int32` 的别名，等价于 int；U2 和 `int32` 会关联到同一个类型元数据属于同一种类型。
+- `type U2 = int32` 是 `int32` 的别名，等价于 `int32`；U2 和 `int32` 会关联到同一个类型元数据属于同一种类型。
 **`rune` 和 `int32`、`byte` 和 `uint8` 就是这样的关系**。
 
 下面所示非空接口 `r` 的静态类型是 `io.Reader`，动态类型是 `*os.File`。
