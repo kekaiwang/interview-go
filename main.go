@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"sort"
-	"time"
 )
 
 func getA() (i int) {
@@ -513,9 +512,51 @@ func lengthOfStr(s string) int {
 	return ans
 }
 
+func deferTest() {
+	var arr = [3]int{1, 2, 3}
+	defer printTest(&arr)
+
+	arr[0] = 4
+	return
+}
+
+func printTest(array *[3]int) {
+	for i := range array {
+		fmt.Println(array[i])
+	}
+}
+
 func main() {
 
-	fmt.Println(time.Now().Unix())
+	fmt.Println("test")
+
+	// nums := []int{0, 0, 1, 1, 1, 2, 2, 3, 3, 4}
+
+	// n := len(nums)
+
+	// slow := 1
+
+	// for fast := 1; fast < n; fast++ {
+	// 	if nums[fast] != nums[fast-1] {
+	// 		nums[slow] = nums[fast]
+	// 		slow++
+	// 	}
+	// }
+
+	// fmt.Println(slow, nums)
+
+	// fmt.Println(1 % 10)
+
+	// arr := new([]string)
+
+	// *arr = append(*arr, "kevin")
+	// fmt.Println(arr)
+	// deferTest()
+	// var name string                                                   // [1]
+	// flag.StringVar(&name, "name", "everyone", "The greeting object.") // [2]
+	// flag.Parse()
+	// fmt.Printf("Hello, %v!\n", name)
+	// fmt.Println(time.Now().Unix())
 
 	// ch := make(chan int, 10)
 
