@@ -229,3 +229,6 @@ it.offset = uint8(r >> h.B & (bucketCnt - 1))
     因此，在 `Get` 中也需要加锁，因为这⾥只是读，建议使⽤读写 `sync.RWMutex` 。
 
 - **sync.map 没有 len 方法**
+
+- **map panic 无法 recover**
+    当并发写入时会抛出 throw -> fatalthrow -> exit(2)
