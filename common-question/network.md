@@ -461,6 +461,15 @@ ARP 请求数据包里包括源主机的 IP 地址、硬件地址、以及目的
     2. RARP服务器收到了RARP请求数据包，为其分配IP地址，并将RARP回应发送给主机。
     3. PC1收到RARP回应后，就使用得到的IP地址进行通讯。
 
+在 Linux 系统中，我们可以使用 `arp -a` 命令来查看 ARP 缓存的内容。
+
+```shell
+[root@kane ~]# arp -a
+? (172.17.0.2) at 02:42:ac:11:00:02 [ether] on docker0
+? (172.17.0.3) at 02:42:ac:11:00:03 [ether] on docker0
+gateway (172.23.47.253) at ee:ff:ff:ff:ff:ff [ether] on eth0
+```
+
 #### 为何需要把 TCP/IP 协议栈分成 5 层（或7层）？
 
 答：ARPANET 的研制经验表明，对于复杂的计算机网络协议，其结构应该是层次式的。
