@@ -607,6 +607,15 @@ TCP（Transmission Control Protocol 传输控制协议）是一种面向连接�
 - `LAST_ACK`：服务端发动最后的FIN包，等待最后的客户端ACK响应，进入此状态。
 - `TIME_WAIT`：客户端收到服务端的FIN包，并立即发出ACK包做最后的确认，在此之后的2MSL时间称为TIME_WAIT状态。
 
+TCP 的连接状态查看，在 Linux 可以通过 `netstat -napt` 进行查看
+
+```shell
+[root@izbp1j0w4hg4n0phhk61ikz ~]# netstat -napt
+Active Internet connections (servers and established)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+tcp        0      0 127.0.0.1:2379          0.0.0.0:*               LISTEN      24669/etcd          
+```
+
 #### 流量控制原理吗？
 
 - 目的是接收方通过TCP头窗口字段告知发送方本方可接收的最大数据量，用以解决发送速率过快导致接收方不能接收的问题。所以流量控制是点对点控制。
