@@ -426,7 +426,7 @@ quicklist 默认的压缩深度是 0，也就是不压缩。压缩的实际深�
 
 ### 压缩列表
 
-Redis 为了节约内存空间使用，**`zset` 和 `hash` 对象在元素个数较少的时候，采用压缩列表 (ziplist) 进行存储**。  
+Redis 为了节约内存空间使用，**`list` 、`zset` 和 `hash` 对象在元素个数较少的时候，采用压缩列表 (ziplist) 进行存储**。  
 **压缩列表是一块连续的内存空间，元素之间紧挨着存储，没有任何冗余空隙**。
 
 ```shell
@@ -470,33 +470,6 @@ struct entry {
 每个 entry 都会有一个 `prevlen` 字段存储前一个 entry 的长度。如果内容小于 254 字节，prevlen 用 1 字节存储，否则就是 5 字节。
 
 如果 ziplist 里面每个 entry 恰好都存储了 253 字节的内容，那么第一个 entry 内容的修改就会导致后续所有 entry 的级联更新，这就是一个比较耗费计算资源的操作。
-
-#### IntSet 小整数集合
-
-**当 set 集合容纳的元素都是整数并且元素个数较小时，Redis 会使用 `intset` 来存储结合元素**。
-`intset` 是紧凑的数组结构，同时支持 16 位、32 位和 64 位整数。
-
-```c++
-struct intset<T> {
-    int32 encoding; // 决定整数位宽是 16 位、32 位还是 64 位
-    int32 length; // 元素个数
-    int<T> contents; // 整数数组，可以是 16 位、32 位和 64 位
-}
-```
-
-```c++
-> sadd codehole 1 2 3
-(integer) 3
-> debug object codehole
-Value at:0x7fec2dc2bde0 refcount:1 encoding:intset serializedlength:15 lru:6065795 lru_seconds_idle:4
-> sadd codehole go java python
-(integer) 3
-> debug object codehole
-Value at:0x7fec2dc2bde0 refcount:1 encoding:hashtable serializedlength:22 lru:6065810 lru_seconds_idle:5
-```
-
-注意观察 debug object 的输出字段 encoding 的值
-**当 `set` 里面放进去了非整数值时，存储形式立即从 `intset` 转变成了 `hash` 结构**
 
 ## 3. hash - 字典
 
@@ -654,6 +627,37 @@ set 结构可以用来存储活动中奖的用户 ID，因为有去重功能，�
 > spop books  # 弹出一个
 "java"
 ```
+
+#### IntSet 小整数集合
+
+**当 set 集合容纳的元素都是整数并且元素个数较小时，Redis 会使用 `intset` 来存储结合元素**。
+`intset` 是紧凑的数组结构，同时支持 16 位、32 位和 64 位整数。
+
+```c++
+struct intset<T> {
+    int32 encoding; // 决定整数位宽是 16 位、32 位还是 64 位
+    int32 length; // 元素个数
+    int<T> contents; // 整数数组，可以是 16 位、32 位和 64 位
+}
+```
+
+```c++
+> sadd codehole 1 2 3
+(integer) 3
+> debug object codehole
+Value at:0x7fec2dc2bde0 refcount:1 encoding:intset serializedlength:15 lru:6065795 lru_seconds_idle:4
+> sadd codehole go java python
+(integer) 3
+> debug object codehole
+Value at:0x7fec2dc2bde0 refcount:1 encoding:hashtable serializedlength:22 lru:6065810 lru_seconds_idle:5
+```
+
+注意观察 debug object 的输出字段 encoding 的值
+**当 `set` 里面放进去了非整数值时，存储形式立即从 `intset` 转变成了 `hash` 结构**
+
+**整数集合升级的好处是节省内存资源**。
+如果一直向整数集合添加 int16_t 类型的元素，那么整数集合的底层实现就一直是用 int16_t 类型的数组，只有在我们要将 int32_t 类型或 int64_t 类型的元素添加到集合时，才会对数组进行升级操作。
+
 
 ## 5. zset - 有序集合
 
