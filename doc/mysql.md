@@ -1182,6 +1182,14 @@ Q6:ROLLBACK TO SAVEPOINT sp;
 
 ### 5.3 为什么只改一行加这么多锁？
 
+可以通过 `select * from performance_schema.data_locks\G;` 这条语句，查看事务执行 SQL 过程中加了什么锁。
+
+OCK_TYPE 中的 RECORD 表示行级锁，而不是记录锁的意思，通过 LOCK_MODE 可以确认是 next-key 锁，还是间隙锁，还是记录锁：
+
+- 如果 LOCK_MODE 为 X，说明是 X 型的 next-key 锁；
+- 如果 LOCK_MODE 为 X, REC_NOT_GAP，说明是 X 型的记录锁；
+- 如果 LOCK_MODE 为 X, GAP，说明是 X 型的间隙锁；
+
 **加锁规则包含两个“原则”、两个“优化”和一个“bug”**。
 
 1. **原则 1**：**加锁的基本单位是 `next-key lock`**。`next-key lock` 是前开后闭区间。
