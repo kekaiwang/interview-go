@@ -310,6 +310,41 @@ park_m:
 
 ## string
 
+如果是代码中存在的字符串，编译器会将其标记成只读数据 `SRODATA`，假设我们有以下代码，其中包含了一个字符串，当我们将这段代码编译成汇编语言时，就能够看到 hello 字符串有一个 `SRODATA` 的标记：
+
+```go
+$ cat main.go
+package main
+
+func main() {
+    str := "hello"
+    println([]byte(str))
+}
+
+$ GOOS=linux GOARCH=amd64 go tool compile -S main.go
+...
+go.string."hello" SRODATA dupok size=5
+    0x0000 68 65 6c 6c 6f                                   hello
+...
+```
+
+只读只意味着字符串会分配到只读的内存空间，但是 Go 语言只是不支持直接修改 `string` 类型变量的内存空间，我们仍然可以通过在 `string` 和 `[]byte` 类型之间反复转换实现修改这一目的：
+
+1. 先将这段内存拷贝到堆或者栈上；
+2. 将变量的类型转换成 `[]byte` 后并修改字节数据；
+3. 将修改后的字节数组转换回 `string`；
+
+### 数据结构
+
+每一个字符串在运行时都会使用如下的 `reflect.StringHeader` 表示，其中包含指向字节数组的指针和数组的大小：
+
+```go
+type StringHeader struct {
+    Data uintptr
+    Len  int
+}
+```
+
 字符串拼接最好使用下面缓冲的形式拼接
 
 ```go
@@ -679,9 +714,6 @@ a = append(a, "kevin")
 
 ## map
 
-- **删除 map 不存在的键值对时，不会报错，相当于没有任何作用**
-- **获取不存在的键值对时，返回值类型对应的零值，所以返回 0**
-
 ### map 结构 hmap
 
 `map` 类型的变量本质上是一个 `hmap` 类型的指针：
@@ -849,6 +881,7 @@ it.offset = uint8(r >> h.B & (bucketCnt - 1))
 ### map 删除
 
 1. 它首先会检查 `h.flags` 标志，如果发现写标位是 1，直接 `panic`，因为这表明有其他协程同时在进行写操作。
+**此时的 recover 无法捕获 panic，因为 throw 会调用 fatalthrow 直接进行 exit**
 
 2. 计算 `key` 的哈希，找到落入的 bucket。检查此 `map` 如果正在扩容的过程中，直接触发一次搬迁操作。
 删除操作同样是两层循环，核心还是找到 key 的具体位置。寻找过程都是类似的，在 bucket 中挨个 cell 寻找。
@@ -924,6 +957,9 @@ it.offset = uint8(r >> h.B & (bucketCnt - 1))
 ```
 
 如果通过其他 hack 的方式，例如 unsafe.Pointer 等获取到了 key 或 value 的地址，也不能长期持有，因为一旦发生扩容，key 和 value 的位置就会改变，之前保存的地址也就失效了。
+
+- **删除 map 不存在的键值对时，不会报错，相当于没有任何作用**
+- **获取不存在的键值对时，返回值类型对应的零值，所以返回 0**
 
 ## for range
 
