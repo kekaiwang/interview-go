@@ -341,7 +341,7 @@ go.string."hello" SRODATA dupok size=5
 ```go
 type StringHeader struct {
     Data uintptr
-    Len  int
+    Len  int // 字节个数
 }
 ```
 
