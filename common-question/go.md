@@ -225,6 +225,23 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 
 `channel、function、complex`、循环引用的数据类型不能被 `json.Marshal` 序列化
 
+1. 如何判断 json 解析的数据是默认零值还是参数未传递
+
+```go
+type Per struct {
+    Name string `json:"name"`
+    Age  int   `json:"age"`
+}
+
+s := `{"name": "wk"}`
+
+var p Per
+json.Unmarshal([]byte(s), &p) // {wk 0}
+```
+
+则在解析这个 JSON 对象时，无法区分 Age 字段的值是传递的 0 还是默认的 0 值。
+**在这种情况下，可以使用指针类型来解决这个问题**。
+
 ### atomic
 
 ```go
