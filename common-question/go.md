@@ -1220,7 +1220,7 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 
 **atomic 包的原子操作是通过 CPU 指令，也就是在硬件层次去实现的，性能较好**，不需要像 mutex 那样记录很多状态。
 
-**atomic的add操作（硬件层面的原子操作），同一时间点只让一个cpu不可中断的执行这些指令．**
+**atomic的add操作（硬件层面的原子操作），同一时间点只让一个cpu不可中断的执行这些指令．**.
 
 ### 2.1 mutex
 
@@ -1827,16 +1827,14 @@ type _panic struct {
 
 ### 没有 recover 发生的 panic
 
-**recover 只有在发生 panic 之后调用才会生效**
+**recover 只有在发生 panic 之后调用才会生效**.
 
 没有recover发生的panic处理逻辑就算梳理完了，理解这个过程的关键点有两个：
 
 1. panic 执行 defer 函数的方式，先标记，后移除，目的是为了终止之前工作的 panic；
 2. panic 异常信息：所有还在 panic 链表上的链表项都会被输出，顺序与 panic 发生的顺序一致。
 
-### revoce
-
-
+### recover
 
 ## 4. 内存分配
 
@@ -2200,7 +2198,7 @@ Go 程序启动后，会给每个逻辑核心分配一个 `P`（Logical Processo
 #### 主动挂起
 
 1. `runtime.gopark` 是触发调度最常见的方法，该函数会将当前 Goroutine 暂停，被暂停的任务不会放回运行队列
-2. 然后通过 r`untime.mcal`l 切换到 `g0` 的栈上调用 `runtime.park_m`：
+2. 然后通过 `runtime.mcall` 切换到 `g0` 的栈上调用 `runtime.park_m`：
     `runtime.park_m` 会将当前 Goroutine 的状态从 `_Grunning` 切换至 `_Gwaiting`，调用 `runtime.dropg` 移除线程和 Goroutine 之间的关联，在这之后就可以调用 `runtime.schedule` 触发新一轮的调度了。
 3. 当 Goroutine 等待的特定条件满足后，运行时会调用 `runtime.goready` 将因为调用 `runtime.gopark` 而陷入休眠的 Goroutine 唤醒。
 4. `runtime.ready` 会将准备就绪的 Goroutine 的状态切换至 `_Grunnable` 并将其加入处理器的运行队列中，等待调度器的调度。
